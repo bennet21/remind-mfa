@@ -170,7 +170,7 @@ class CommonDataExporter(SimsonBaseModel):
         colors = plc.qualitative.Dark24
         if linecolor_dim:
             dimletter = next(
-                dimlist.letter for dimlist in mfa.dims.dim_list if dimlist.name == linecolor_dim
+                dimlist.letter for dimlist in data_to_plot.dims.dim_list if dimlist.name == linecolor_dim
             )
             colors = (
                 colors[: data_to_plot.dims[dimletter].len]

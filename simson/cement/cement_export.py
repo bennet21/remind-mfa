@@ -24,7 +24,8 @@ class CementDataExporter(CommonDataExporter):
 
     def visualize_results(self, model: "CementModel"):
         if self.cfg.clinker_production["do_visualize"]:
-            self.visualize_clinker_production(mfa=model.future_mfa)
+            self.visualize_clinker_production(mfa=model.future_mfa, regional=False)
+            self.visualize_clinker_production(mfa=model.future_mfa, regional=True)
         if self.cfg.cement_production["do_visualize"]:
             self.visualize_cement_production(mfa=model.future_mfa, regional=False)
             self.visualize_cement_production(mfa=model.future_mfa, regional=True)
@@ -62,29 +63,56 @@ class CementDataExporter(CommonDataExporter):
             title = f"Global {name} Production"
             production = production.sum_over("r")
 
+        filename = "Global" if not regional else "Regional"
+        file_high = rf"path\to\file\{name}_{filename}_high.pkl"
+        file_low = rf"path\to\file\{name}_{filename}.pkl"
+        file_low_CE = rf"path\to\file\{name}_{filename}_CE.pkl"
+        import pickle
+        # with open(file_low_CE, 'wb') as f:
+        #     pickle.dump(production, f)
+
+        with open(file_high, 'rb') as f:
+            data_high = pickle.load(f)
+        with open(file_low, 'rb') as f:
+            data_low = pickle.load(f)
+        with open(file_low_CE, 'rb') as f:
+            data_low_ce = pickle.load(f)
+
+        from flodym.dimensions import Dimension
+        from flodym.flodym_array_helper import flodym_array_stack
+
+        demand_dim = Dimension(name="Demand Scenario", letter="d", items=["high", "low", "low_CE"])
+
+        production: fd.FlodymArray = flodym_array_stack(
+            [data_high, data_low, data_low_ce],
+            demand_dim
+        )
+
+        production[...] = production[...] * 0.507
+
+        linecolor_dim= "Demand Scenario"
+
         fig, ap_production = self.plot_history_and_future(
             mfa=mfa,
             data_to_plot=production,
             subplot_dim=subplot_dim,
             x_array=x_array,
             linecolor_dim=linecolor_dim,
-            x_label=x_label,
-            y_label=y_label,
-            title=title,
-            line_label="Production",
+            x_label=None,
+            y_label=None,
         )
 
         self.plot_and_save_figure(
             ap_production, f"{name}_production{regional_tag}.png", do_plot=False
         )
 
-    def visualize_clinker_production(self, mfa: fd.MFASystem):
+    def visualize_clinker_production(self, mfa: fd.MFASystem, regional: bool = False):
         production = mfa.flows["clinker_production => cement_grinding"]
-        self.visualize_production(production, "Clinker")
+        self.visualize_production(mfa=mfa, production=production, name="Clinker", regional=regional)
 
     def visualize_cement_production(self, mfa: fd.MFASystem, regional: bool = False):
         production = mfa.flows["cement_grinding => concrete_production"]
-        self.visualize_production(mfa=mfa, production=production, name="Cement", regional=regional)
+        self.visualize_production(mfa=mfa, production=production, name="Apparent Cement", regional=regional)
 
     def visualize_concrete_production(self, mfa: fd.MFASystem):
         production = mfa.flows["concrete_production => use"].sum_over("s")

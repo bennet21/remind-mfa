@@ -77,12 +77,33 @@ class CementModel:
         )
 
     def get_long_term_stock(self) -> fd.FlodymArray:
-        # extrapolate in use stock to future
+        """Extrapolate in use stock to future."""
+
+        # get individual extrapolation without restrictions
         indep_fit_dim_letters = ("r",)
-        sat_bound = Bound(var_name="saturation_level", lower_bound=200, upper_bound=200)
+    
+        individual_stock_extrapolation = StockExtrapolation(
+            self.historic_mfa.stocks["historic_in_use"].stock,
+            dims=self.dims,
+            parameters=self.parameters,
+            stock_extrapolation_class=self.cfg.customization.stock_extrapolation_class,
+            target_dim_letters=("t", "r"),
+            indep_fit_dim_letters=indep_fit_dim_letters,
+        )
+
+        # get stretch factor for China as maximum stretch factor
+        cha_idx = self.historic_mfa.stocks["historic_in_use"].stock.dims["r"].items.index("CHA")
+        stretch_factor_idx = 2
+        cha_stretch_factor = individual_stock_extrapolation.extrapolation.fit_prms[cha_idx][stretch_factor_idx]
+
+
+        # get individual extrapolation with restrictions
+        sat_bound = Bound(var_name="saturation_level", lower_bound=150, upper_bound=150)
+        stretch_bound = Bound(var_name="stretch_factor", lower_bound=0, upper_bound=cha_stretch_factor)
         bound_list = BoundList(
             bound_list=[
                 sat_bound,
+                stretch_bound,
             ],
             target_dims=self.dims[indep_fit_dim_letters],
         )

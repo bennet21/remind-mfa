@@ -135,20 +135,20 @@ class StockExtrapolation:
         for i in range(n_deriv + 5):
             gdppc[125 - i, ...] = gdppc[125 - i + 1, ...] * growth
 
-        extrapolation = self.stock_extrapolation_class(
+        self.extrapolation = self.stock_extrapolation_class(
             data_to_extrapolate=historic_in,
             target_range=gdppc,
             independent_dims=self.fit_dim_idx,
             bound_list=self.bound_list,
         )
-        pure_prediction = extrapolation.regress()
+        self.pure_prediction = self.extrapolation.regress()
 
         if self.stock_correction == "gaussian_first_order":
-            prediction_out[...] = self.gaussian_correction(historic_in, pure_prediction, n_deriv)
+            prediction_out[...] = self.gaussian_correction(historic_in, self.pure_prediction, n_deriv)
         elif self.stock_correction == "shift_zeroth_order":
             # match last point by adding the difference between the last historic point and the corresponding prediction
-            prediction_out[...] = pure_prediction - (
-                pure_prediction[n_historic - 1, :] - historic_in[n_historic - 1, :]
+            prediction_out[...] = self.pure_prediction - (
+                self.pure_prediction[n_historic - 1, :] - historic_in[n_historic - 1, :]
             )
 
         prediction_out[:n_historic, ...] = historic_in
