@@ -75,6 +75,51 @@ class CementModel:
             flows=flows,
             stocks=stocks,
         )
+    
+    def get_max_growth_rate(self) -> float:
+        """Calculate the maximum stock growth rate of industrialized regions based on historic data."""
+        # TODO this function should be placed in stock extrapolation
+
+        industrialized_regions = fd.Dimension(
+            name="industrialized_regions",
+            dim_letter="i",
+            items=["EUR", "NEU", "CAZ", "CHA", "JPN", "USA"],
+            dtype=str,
+        )
+
+        population = self.historic_mfa.parameters["population"][{"r": industrialized_regions}][{"t": self.dims["h"]}]
+        stocks = self.historic_mfa.stocks["historic_cement_in_use"].stock[{"r": industrialized_regions}].sum_over("s")
+        gdppc = self.historic_mfa.parameters["gdppc"][{"r": industrialized_regions}]
+        
+        log_gdppc = np.log(gdppc[{"t": self.dims["h"]}].values)
+        dlog_gdppc = np.diff(log_gdppc, axis=0)
+        dstock = np.diff(stocks.values / population.values, axis=0)
+        growth_rates = dstock / dlog_gdppc
+
+        # from scipy.signal import savgol_filter
+        # growth_rates_savgol = savgol_filter(growth_rates, 9, 3, axis=0)
+
+        from scipy.ndimage import uniform_filter1d
+        growth_rates_uniform = uniform_filter1d(growth_rates, size=9, axis=0, mode='nearest')
+
+        import matplotlib.pyplot as plt
+        mid_log_gdppc = 0.5 * (log_gdppc[:-1] + log_gdppc[1:])
+        region_names = industrialized_regions.items  # ['EUR', 'NEU', 'CAZ', 'CHA', 'JPN', 'USA']
+        colors = plt.cm.tab10.colors  # or any other colormap you like
+
+        for i, region in enumerate(region_names):
+            color = colors[i % len(colors)]
+            plt.plot(mid_log_gdppc[:, i], growth_rates[:, i], color=color, linestyle=':', label=f'{region} raw')
+            # plt.plot(mid_log_gdppc[:, i], growth_rates_savgol[:, i], color=color, linestyle='--', label=f'{region} savgol')
+            plt.plot(mid_log_gdppc[:, i], growth_rates_uniform[:, i], color=color, linestyle='-', label=f'{region} uniform')
+
+        plt.legend()
+        plt.xlabel("log(GDP per capita)")
+        plt.ylabel("Growth rate")
+        plt.show()
+        return None
+
+        
 
     def get_long_term_stock(self) -> fd.FlodymArray:
         # extrapolate in use stock to future
