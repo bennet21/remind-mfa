@@ -23,6 +23,7 @@ class CementDataExporter(CommonDataExporter):
     }
 
     def visualize_results(self, model: "CementModel"):
+        # self.visualize_lifetime(mfa=model.future_mfa)
         if self.cfg.clinker_production["do_visualize"]:
             self.visualize_clinker_production(mfa=model.future_mfa)
         if self.cfg.cement_production["do_visualize"]:
@@ -40,6 +41,34 @@ class CementDataExporter(CommonDataExporter):
         if self.cfg.extrapolation["do_visualize"]:
             self.visualize_extrapolation(model=model)
         self.stop_and_show()
+
+    def visualize_lifetime(self, mfa: fd.MFASystem):
+        lifetimes = mfa.stocks["in_use"].lifetime_model
+        mean_lifetime = fd.FlodymArray(values=lifetimes.mean, dims=lifetimes.dims)
+        std_lifetime = fd.FlodymArray(values=lifetimes.std, dims=lifetimes.dims)
+
+        def mean_over(x: fd.FlodymArray, dims: tuple):
+            summed = x.sum_over(dims)
+            # TODO this does not work if dims is more than one dimension
+            # TODO this function could be added to flodym
+            return summed / x.dims.size(dims[0]) if dims else summed
+
+        red_mean_lifetime = mean_over(mean_over(mean_lifetime, ("t",)), ("r",))
+        red_std_lifetime = mean_over(mean_over(std_lifetime, ("t",)), ("r",))
+
+        import numpy as np
+        max_lifetime = red_mean_lifetime.values.max() * 3
+        x_values = np.linspace(0, max_lifetime, 100)
+
+        mean_square = red_mean_lifetime * red_mean_lifetime
+        std_square = red_std_lifetime * red_std_lifetime
+        new_mean = np.log(mean_square.values / np.sqrt(mean_square.values + std_square.values))
+        new_std = np.sqrt(np.log(1 + std_square.values / mean_square.values))
+       
+        # import scipy.stats
+        # pdf_values = scipy.stats.lognorm.pdf(x_values, s=new_std, loc=0, scale=np.exp(new_mean))    
+
+        return None
 
     def visualize_production(
         self, mfa: fd.MFASystem, production: fd.Flow, name: str, regional: bool = False
