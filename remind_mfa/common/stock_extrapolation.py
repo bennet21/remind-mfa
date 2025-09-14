@@ -375,7 +375,7 @@ class StockExtrapolation:
 
         integral = term1 - term2 + term3
         
-        return integral / h
+        return integral
     
     def find_optimal_cubic_spline_endpoint(
             self,
@@ -583,7 +583,7 @@ class StockExtrapolation:
 
         integral = term1 - term2 + term3 + term4 - term5 - term6 + term7 + term8
         
-        return integral / h
+        return integral
     
     # @staticmethod
     # def _calculate_quintic_spline_roughness(p0, v0, a0, p1, v1, a1, h):
@@ -629,7 +629,7 @@ class StockExtrapolation:
             y_prime_start: np.ndarray,
             y_prime2_start: np.ndarray,
             n_end: int = 5,
-            search_range_years: tuple = (50, 100)
+            search_range_years: tuple = (20, 100)
         ) -> np.ndarray:
         """
         Finds the optimal endpoint for a quintic Hermite spline by minimizing jerk.
@@ -677,13 +677,24 @@ class StockExtrapolation:
 
             # Calculate the jerk of this potential spline
             interval_h = x_end - x_start
-            jerk = self._calculate_quintic_spline_jerk(y_start, y_prime_start, y_prime2_start, y_end, y_prime_end, y_prime2_end, interval_h)
+            jerk_transition = self._calculate_quintic_spline_jerk(y_start, y_prime_start, y_prime2_start, y_end, y_prime_end, y_prime2_end, interval_h)
+            jerk_rest = self._calculate_jerk(prediction[end_idx + 1:])
+            full_jerk = jerk_transition + jerk_rest
             # update minimum jerk and optimal index where applicable
-            update_mask = jerk < min_jerk
-            min_jerk[update_mask] = jerk[update_mask]
+            update_mask = full_jerk < min_jerk
+            min_jerk[update_mask] = full_jerk[update_mask]
             optimal_end_idx[update_mask] = end_idx
         
         if np.any(optimal_end_idx == -1):
              raise RuntimeError("Could not find an optimal endpoint. Check search range and data.")
 
         return optimal_end_idx
+    
+    @staticmethod
+    def _calculate_jerk(x, dt=1.0):
+        if len(x) < 4:
+            return np.inf
+        v = np.gradient(x, dt, axis=0)
+        a = np.gradient(v, dt, axis=0)
+        j = np.gradient(a, dt, axis=0)
+        return np.sum(j**2, axis=0)

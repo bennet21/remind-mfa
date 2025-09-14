@@ -93,7 +93,7 @@ class CementModel:
         # 1) constrain saturation level
         region_sat = fd.FlodymArray(
             dims=self.dims[("r",)],
-            values=np.array([20, 20, 20, 24, 24, 20, 20, 18, 30, 20, 18, 18]),
+            values=np.array([20, 20, 20, 24, 24, 20, 20, 18, 30, 20, 16, 18]),
         )
         sat_bound = Bound(
             var_name="saturation_level",
@@ -168,7 +168,7 @@ class CementModel:
             indep_fit_dim_letters=indep_fit_dim_letters,
             bound_list=bound_list,
             stock_correction="quintic_spline",
-            n_deriv=20,
+            n_deriv=10,
         )
 
         add_assumption_doc(
