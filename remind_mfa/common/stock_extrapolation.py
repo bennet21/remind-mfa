@@ -290,53 +290,62 @@ class StockExtrapolation:
         # Starting point
         last_history_idx = len(historic) - 1
         x_start = time[last_history_idx]
-        y_start = historic[-1]
+        ys_start = historic[-1]
 
         # Starting point derivative
         fit_indices = np.arange(last_history_idx - n + 1, last_history_idx + 1)
         time_fit = time[fit_indices]
         historic_fit = historic[fit_indices]
         coeffs = np.polyfit(time_fit, historic_fit, 1)
-        y_prime_start = coeffs[0]
-
-        # End point
-        end_idx = self.find_optimal_spline_endpoint(
-            time=time,
-            prediction=prediction,
-            x_start=x_start,
-            y_start=y_start,
-            y_prime_start=y_prime_start,
-            start_idx=last_history_idx,
-            n=n
-        )
-        print(f"Optimal endpoint found at time t={time[end_idx]:.2f} (index {end_idx})")
-        x_end = time[end_idx]
-        y_end = prediction[end_idx]
-
-        # End point derivative
-        fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
-        time_fit = time[fit_indices]
-        prediction_fit = prediction[fit_indices]
-        coeffs = np.polyfit(time_fit, prediction_fit, 1)
-        y_prime_end = coeffs[0]
-
-        # Create the Hermite spline
-        final_spline = CubicHermiteSpline(
-            x=[x_start, x_end],
-            y=np.vstack([[y_start], [y_end]]),
-            dydx=np.vstack([[y_prime_start], [y_prime_end]])
-        )
+        ys_prime_start = coeffs[0]
 
         # Construct the corrected prediction
         corrected_prediction = prediction.copy()
 
-        # Before transition, keep historic values
+        # Before transition, keep historic values - same starting point across all dimensions
         corrected_prediction[:last_history_idx + 1] = historic
 
-        # In the transition period, apply the spline
-        transition_indices = np.arange(last_history_idx, end_idx + 1)
-        transition_times = time[transition_indices]
-        corrected_prediction[transition_indices] = final_spline(transition_times)
+        # End point
+        end_idxs = self.find_optimal_spline_endpoint(
+            time=time,
+            prediction=prediction,
+            x_start=x_start,
+            y_start=ys_start,
+            y_prime_start=ys_prime_start,
+            start_idx=last_history_idx,
+            n=n
+        )
+
+        # create spline for each independent dimension (except time)
+        # TODO make this agnostic of position of time dimension
+        for ndi in np.ndindex(prediction.shape[1:]):
+            end_idx = end_idxs[ndi]
+
+            # x_start stays the same
+            y_start = ys_start[ndi]
+            y_prime_start = ys_prime_start[ndi]
+
+            x_end = time[end_idx]
+            y_end = prediction[end_idx, ndi]
+
+            # End point derivative
+            fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
+            time_fit = time[fit_indices]
+            prediction_fit = prediction[fit_indices, ndi]
+            coeffs = np.polyfit(time_fit, prediction_fit, 1)
+            y_prime_end = coeffs[0]
+
+            # Create the Hermite spline
+            final_spline = CubicHermiteSpline(
+                x=[x_start, x_end],
+                y=np.vstack([[y_start], [y_end]]),
+                dydx=np.vstack([[y_prime_start], [y_prime_end]])
+            )
+
+            # In the transition period, apply the spline
+            transition_indices = np.arange(last_history_idx, end_idx + 1)
+            transition_times = time[transition_indices]
+            corrected_prediction[transition_indices, ndi] = final_spline(transition_times).squeeze()
 
         return corrected_prediction
     
@@ -392,8 +401,8 @@ class StockExtrapolation:
         Returns:
             The index of the optimal endpoint in the prediction array.
         """
-        min_roughness = np.inf
-        optimal_end_idx = -1
+        min_roughness = np.full_like(y_start, np.inf, dtype=float)
+        optimal_end_idx = np.full_like(y_start, -1, dtype=int)
 
         # Define the search space in terms of array indices
         min_end_time = x_start + search_range_years[0]
@@ -406,7 +415,7 @@ class StockExtrapolation:
         start_search_idx = max(start_idx + n + 1, start_search_idx)
         end_search_idx = min(len(prediction) - (n + 1), end_search_idx)
 
-        if start_search_idx >= end_search_idx:
+        if np.any(start_search_idx >= end_search_idx):
             raise ValueError("Search range for optimal endpoint is invalid or empty.")
 
         for end_idx in range(start_search_idx, end_search_idx):
@@ -423,13 +432,14 @@ class StockExtrapolation:
 
             # Calculate the roughness of this potential spline
             interval_h = x_end - x_start
-            roughness = self._calculate_spline_roughness(y_start, y_prime_start, y_end, y_prime_end, interval_h).sum()
+            roughness = self._calculate_spline_roughness(y_start, y_prime_start, y_end, y_prime_end, interval_h)
 
-            if roughness < min_roughness:
-                min_roughness = roughness
-                optimal_end_idx = end_idx
+            # update minimum roughness and optimal index where applicable
+            update_mask = roughness < min_roughness
+            min_roughness[update_mask] = roughness[update_mask]
+            optimal_end_idx[update_mask] = end_idx
         
-        if optimal_end_idx == -1:
+        if np.any(optimal_end_idx == -1):
              raise RuntimeError("Could not find an optimal endpoint. Check search range and data.")
 
         return optimal_end_idx
