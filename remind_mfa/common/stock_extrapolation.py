@@ -306,7 +306,7 @@ class StockExtrapolation:
         corrected_prediction[:last_history_idx + 1] = historic
 
         # End point
-        end_idxs = self.find_optimal_spline_endpoint(
+        end_idxs = self.find_optimal_cubic_spline_endpoint(
             time=time,
             prediction=prediction,
             x_start=x_start,
@@ -349,9 +349,10 @@ class StockExtrapolation:
 
         return corrected_prediction
     
-    def _calculate_spline_roughness(self, p0, m0, p1, m1, h):
+    @staticmethod
+    def _calculate_cubic_spline_roughness(p0, m0, p1, m1, h):
         """
-        Calculates the integral of the squared second derivative for a cubic Hermite spline.
+        Calculates the normalized integral of the squared second derivative for a cubic Hermite spline.
 
         This value serves as a measure of the spline's "roughness" or "bending energy".
         A lower value means a smoother curve. The formula is derived from the coefficients
@@ -365,20 +366,27 @@ class StockExtrapolation:
             h (float): The length of the interval (x_end - x_start).
 
         Returns:
-            float: The roughness cost of the spline.
+            float: The normalized roughness cost of the spline.
         """
-        if h < 1e-6:  # Avoid division by zero for very small intervals
-            return np.inf
-
         # This is the analytical solution for the integral of (P''(x))^2 dx from x0 to x1.
         term1 = 4 * (m1**2 + m0 * m1 + m0**2) / h
         term2 = 12 * (p1 - p0) * (m0 + m1) / (h**2)
         term3 = 12 * (p1 - p0)**2 / (h**3)
+
+        integral = term1 - term2 + term3
         
-        return term1 - term2 + term3
+        return integral / h
     
-    def find_optimal_spline_endpoint(
-            self, time: np.ndarray, prediction: np.ndarray, x_start: float, y_start: float, y_prime_start: float, start_idx: int, n: int = 5, search_range_years: tuple = (30, 150)
+    def find_optimal_cubic_spline_endpoint(
+            self,
+            time: np.ndarray,
+            prediction: np.ndarray,
+            x_start: float,
+            y_start: float,
+            y_prime_start: float,
+            start_idx: int,
+            n: int = 5,
+            search_range_years: tuple = (30, 150)
         ) -> int:
         """
         Finds the optimal endpoint for the Hermite spline by minimizing curvature.
@@ -427,12 +435,12 @@ class StockExtrapolation:
             fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
             time_fit = time[fit_indices]
             prediction_fit = prediction[fit_indices]
-            coeffs = np.polyfit(time_fit, prediction_fit, 1)
-            y_prime_end = coeffs[0]
+            coeffs_end = np.polyfit(time_fit, prediction_fit, 1)
+            y_prime_end = coeffs_end[0]
 
             # Calculate the roughness of this potential spline
             interval_h = x_end - x_start
-            roughness = self._calculate_spline_roughness(y_start, y_prime_start, y_end, y_prime_end, interval_h)
+            roughness = self._calculate_cubic_spline_roughness(y_start, y_prime_start, y_end, y_prime_end, interval_h)
 
             # update minimum roughness and optimal index where applicable
             update_mask = roughness < min_roughness
@@ -443,8 +451,24 @@ class StockExtrapolation:
              raise RuntimeError("Could not find an optimal endpoint. Check search range and data.")
 
         return optimal_end_idx
+    
+    @staticmethod
+    def derivatives_from_polyfit(x, y, idx, n):
+            fit_indices = np.arange(idx - n + 1, idx + 1)
+            time_fit = x[fit_indices]
+            prediction_fit = y[fit_indices]
+            coeffs_end = np.polyfit(time_fit, prediction_fit, 2, w=np.linspace(1, 2, len(time_fit)))
+            y_prime_end = 2 * coeffs_end[0] * x[idx] + coeffs_end[1]
+            y_prime2_end = 2 * coeffs_end[0]
+            return y_prime_end, y_prime2_end
 
-    def quintic_spline_correction(self, historic: np.ndarray, prediction: np.ndarray, n: int = 5, transition_years = 20) -> np.ndarray:
+    def quintic_spline_correction(
+            self,
+            historic: np.ndarray,
+            prediction: np.ndarray,
+            n_start: int = 5,
+            n_end: int = 5,
+        ) -> np.ndarray:
         """
         Smoothly corrects the beginning of a prediction series to connect it to a historic series
         using a quintic Hermite spline (BPoly).
@@ -468,38 +492,10 @@ class StockExtrapolation:
         # Starting point
         last_history_idx = len(historic) - 1
         x_start = time[last_history_idx]
-        y_start = historic[-1]
+        ys_start = historic[-1]
 
-        # Starting point derivative
-        fit_indices = np.arange(last_history_idx - n + 1, last_history_idx + 1)
-        time_fit = time[fit_indices]
-        historic_fit = historic[fit_indices]
-        coeffs_start = np.polyfit(time_fit, historic_fit, 2)
-        y_prime_start = 2 * coeffs_start[0] * x_start + coeffs_start[1]
-        y_prime2_start = 2 * coeffs_start[0]
-
-        # End point
-        x_end_target = x_start + transition_years
-        end_idx = np.searchsorted(time, x_end_target)
-        x_end = time[end_idx]
-        y_end = prediction[end_idx]
-
-        # End point derivative
-        fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
-        time_fit = time[fit_indices]
-        prediction_fit = prediction[fit_indices]
-        coeffs_end = np.polyfit(time_fit, prediction_fit, 2)
-        y_prime_end = 2 * coeffs_end[0] * x_end + coeffs_end[1]
-        y_prime2_end = 2 * coeffs_end[0]
-
-        # Create the Hermite spline
-        final_spline = BPoly.from_derivatives(
-            xi=[x_start, x_end],
-            yi=[
-                [y_start, y_prime_start, y_prime2_start],
-                [y_end, y_prime_end, y_prime2_end]
-            ]
-        )
+        # Starting point derivatives
+        ys_prime_start, ys_prime2_start = self.derivatives_from_polyfit(time, historic, last_history_idx, n_start)
 
         # Construct the corrected prediction
         corrected_prediction = prediction.copy()
@@ -507,9 +503,187 @@ class StockExtrapolation:
         # Before transition, keep historic values
         corrected_prediction[:last_history_idx + 1] = historic
 
-        # In the transition period, apply the spline
-        transition_indices = np.arange(last_history_idx, end_idx + 1)
-        transition_times = time[transition_indices]
-        corrected_prediction[transition_indices] = final_spline(transition_times)
+        end_idxs = self.find_optimal_quintic_spline_endpoint(
+            time=time,
+            prediction=prediction,
+            x_start=x_start,
+            y_start=ys_start,
+            y_prime_start=ys_prime_start,
+            y_prime2_start=ys_prime2_start,
+            n_end=n_end,
+        )
+
+        print(time[end_idxs] - x_start)
+
+        # create spline for each independent dimension (except time)
+        # TODO make this agnostic of position of time dimension
+        for ndi in np.ndindex(prediction.shape[1:]):
+            end_idx = end_idxs[ndi]
+
+            # x_start stays the same
+            y_start = ys_start[ndi]
+            y_prime_start = ys_prime_start[ndi]
+            y_prime2_start = ys_prime2_start[ndi]
+
+            x_end = time[end_idx]
+            y_end = prediction[end_idx, ndi]
+
+            # End point derivatives
+            y_prime_end, y_prime2_end = self.derivatives_from_polyfit(time, prediction[:, ndi], end_idx, n_end)
+
+            # Create the Hermite spline
+            final_spline = BPoly.from_derivatives(
+                xi=[x_start, x_end],
+                yi=[
+                    np.vstack([y_start, y_prime_start, y_prime2_start]),
+                    np.vstack([y_end, y_prime_end, y_prime2_end])
+                ]
+            )
+
+            # In the transition period, apply the spline
+            transition_indices = np.arange(last_history_idx, end_idx)
+            transition_times = time[transition_indices]
+            corrected_prediction[transition_indices, ndi] = final_spline(transition_times).squeeze()
 
         return corrected_prediction
+    
+    @staticmethod
+    def _calculate_quintic_spline_jerk(p0, v0, a0, p1, v1, a1, h):
+        """
+        Calculates the normalized integral of the squared third derivative (jerk) for a quintic Hermite spline.
+
+        This value is a standard measure of smoothness for motion profiles, as minimizing
+        jerk reduces vibrations and mechanical stress.
+
+        Args:
+            p0 (float): Start point position.
+            v0 (float): Start point velocity (1st derivative).
+            a0 (float): Start point acceleration (2nd derivative).
+            p1 (float): End point position.
+            v1 (float): End point velocity (1st derivative).
+            a1 (float): End point acceleration (2nd derivative).
+            h (float): The length of the interval.
+
+        Returns:
+            float: The normalized integrated squared jerk cost of the quintic spline.
+        """
+        # This is the analytical solution for the integral of (P'''(x))^2 dx from 0 to h.
+        h3 = h**3
+        h4 = h**4
+        h5 = h**5
+
+        term1 = 36 * (v1**2 + v0**2) / h3
+        term2 = 72 * v0 * v1 / h3
+        term3 = (a1**2 + a0**2) * h / 5
+        term4 = (a0 * a1 * h) / 10
+        term5 = 3 * (a0*v1 - a1*v0) / h
+        term6 = 120 * (p0 - p1)*(a0 - a1) / h3
+        term7 = 360 * (p0 - p1)*(v0 + v1) / h4
+        term8 = 720 * (p1 - p0)**2 / h5
+
+        integral = term1 - term2 + term3 + term4 - term5 - term6 + term7 + term8
+        
+        return integral / h
+    
+    # @staticmethod
+    # def _calculate_quintic_spline_roughness(p0, v0, a0, p1, v1, a1, h):
+    #     """
+    #     Calculates the integral of the squared second derivative (acceleration) for a 
+    #     quintic Hermite spline. This is a measure of the spline's "bending energy".
+
+    #     Args:
+    #         p0 (float): Start point position.
+    #         v0 (float): Start point velocity (1st derivative).
+    #         a0 (float): Start point acceleration (2nd derivative).
+    #         p1 (float): End point position.
+    #         v1 (float): End point velocity (1st derivative).
+    #         a1 (float): End point acceleration (2nd derivative).
+    #         h (float): The length of the interval.
+
+    #     Returns:
+    #         float: The total integrated squared acceleration cost of the spline.
+    #     """
+
+    #     h2 = h**2
+    #     h3 = h**3
+
+    #     term1 = a0**2 * h + a1**2 * h + a0 * a1 * h
+    #     term2 = 12 * (a0 + a1) * (p0 - p1) / h
+    #     term3 = 6 * (a0 * v0 - a1 * v1)
+    #     term4 = 6 * (a1 * v0 - a0 * v1)
+    #     term5 = 12 * (v0**2 + v1**2) / h
+    #     term6 = 24 * v0 * v1 / h
+    #     term7 = 72 * (v0 + v1) * (p1 - p0) / h2
+    #     term8 = 120 * (p1 - p0)**2 / h3
+
+    #     integral = term1 + term2 - term3 + term4 + term5 - term6 + term7 + term8
+        
+    #     return integral / h
+    
+    def find_optimal_quintic_spline_endpoint(
+            self,
+            time: np.ndarray,
+            prediction: np.ndarray,
+            x_start: float,
+            y_start: np.ndarray,
+            y_prime_start: np.ndarray,
+            y_prime2_start: np.ndarray,
+            n_end: int = 5,
+            search_range_years: tuple = (50, 100)
+        ) -> np.ndarray:
+        """
+        Finds the optimal endpoint for a quintic Hermite spline by minimizing jerk.
+
+        It iterates through a specified range of potential endpoints in the prediction
+        data, creates a hypothetical quintic spline for each, and calculates its
+        integrated squared third derivative (jerk). The endpoint that yields the
+        smoothest spline (minimum jerk) is chosen.
+
+        Args:
+            time: The array of time values.
+            prediction: The array of predicted values.
+            x_start: The starting time for the spline.
+            y_start: The starting value for the spline.
+            y_prime_start: The starting first derivative for the spline.
+            y_prime2_start: The starting second derivative for the spline.
+            start_idx: The index in the time/prediction array corresponding to x_start.
+            n_end: The number of points to use for polynomial regression to find derivatives.
+            search_range_years: A tuple defining the min and max years from the start
+                                to search for an optimal endpoint.
+
+        Returns:
+            The array of optimal endpoint indices in the prediction array.
+        """
+        min_jerk = np.full_like(y_start, np.inf, dtype=float)
+        optimal_end_idx = np.full_like(y_start, -1, dtype=int)
+
+        # Define the search space in terms of array indices
+        min_end_time = x_start + search_range_years[0]
+        max_end_time = x_start + search_range_years[1]
+        
+        start_search_idx = np.searchsorted(time, min_end_time, side='left')
+        end_search_idx = np.searchsorted(time, max_end_time, side='right')
+
+        if np.any(start_search_idx >= end_search_idx):
+            raise ValueError("Search range for optimal endpoint is invalid.")
+
+        # TODO vectorize this loop
+        for end_idx in range(start_search_idx, end_search_idx):
+            # Define potential endpoint
+            x_end = time[end_idx]
+            y_end = prediction[end_idx]
+            
+            y_prime_end, y_prime2_end = self.derivatives_from_polyfit(time, prediction, end_idx, n_end)
+
+            # Calculate the jerk of this potential spline
+            interval_h = x_end - x_start
+            jerk = self._calculate_quintic_spline_jerk(y_start, y_prime_start, y_prime2_start, y_end, y_prime_end, y_prime2_end, interval_h)
+            # update minimum jerk and optimal index where applicable
+            update_mask = jerk < min_jerk
+            min_jerk[update_mask] = jerk[update_mask]
+            optimal_end_idx[update_mask] = end_idx
+        
+        if np.any(optimal_end_idx == -1):
+             raise RuntimeError("Could not find an optimal endpoint. Check search range and data.")
+
+        return optimal_end_idx

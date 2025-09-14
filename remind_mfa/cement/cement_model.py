@@ -167,7 +167,7 @@ class CementModel:
             target_dim_letters=("t", "r"),
             indep_fit_dim_letters=indep_fit_dim_letters,
             bound_list=bound_list,
-            stock_correction="cubic_spline",
+            stock_correction="quintic_spline",
             n_deriv=20,
         )
 
