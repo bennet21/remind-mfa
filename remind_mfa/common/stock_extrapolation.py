@@ -1,7 +1,7 @@
 import flodym as fd
 import numpy as np
 from typing import Tuple, Union, Type
-from copy import deepcopy
+from scipy.interpolate import CubicHermiteSpline, BPoly
 
 from remind_mfa.common.data_extrapolations import Extrapolation
 from remind_mfa.common.data_transformations import broadcast_trailing_dimensions, BoundList
@@ -24,6 +24,7 @@ class StockExtrapolation:
         bound_list: BoundList = BoundList(),
         do_gdppc_accumulation: bool = True,
         stock_correction: str = "gaussian_first_order",
+        n_deriv: int = 5,
     ):
         """
         Initialize the StockExtrapolation class.
@@ -44,6 +45,7 @@ class StockExtrapolation:
         self.parameters = parameters
         self.stock_extrapolation_class = stock_extrapolation_class
         self.target_dim_letters = target_dim_letters
+        self.n_deriv = n_deriv
         self.set_dims(indep_fit_dim_letters)
         self.bound_list = bound_list
         self.do_gdppc_accumulation = do_gdppc_accumulation
@@ -121,35 +123,16 @@ class StockExtrapolation:
         gdppc = broadcast_trailing_dimensions(gdppc, prediction_out)
         n_historic = historic_in.shape[0]
 
-        n_deriv = 5
         add_assumption_doc(
             type="integer number",
             name="n years for regression derivative correction",
-            value=n_deriv,
+            value=self.n_deriv,
             description=(
                 "Number of historic years used for determination of regressed and actual "
                 "growth rates of ins-use stocks, which are then used for a correction "
                 "reconciling the two and blending from observed to regression."
             ),
         )
-
-        add_assumption_doc(
-            name="synthetic recent GDP for regression correction",
-            type="ad-hoc fix",
-            description=(
-                "GDP per capita SSP curves assume a steady growth after 2025, which in some "
-                "regions breaks historic trends. Here, we overwrite recent historic GDP per capita "
-                "by extrapolating back from 2025 using the growth rates after 2025. "
-                "This creates continuity between the recent historic GDP growth used for the "
-                "gaussian correction and the future assumed growth rates and thereby prevents "
-                "discontinuities in production."
-            ),
-        )
-        i_2025 = self.dims["t"].index(2025)
-        gdppc = deepcopy(gdppc)
-        growth = gdppc[i_2025 + 1] / gdppc[i_2025 + 2]
-        for i in range(n_deriv + 5):
-            gdppc[i_2025 - i, ...] = gdppc[i_2025 - i + 1, ...] * growth
 
         self.extrapolation = self.stock_extrapolation_class(
             data_to_extrapolate=historic_in,
@@ -160,7 +143,7 @@ class StockExtrapolation:
         pure_prediction = self.extrapolation.regress()
 
         if self.stock_correction == "gaussian_first_order":
-            prediction_out[...] = self.gaussian_correction(historic_in, pure_prediction, n_deriv)
+            prediction_out[...] = self.gaussian_correction(historic_in, pure_prediction, self.n_deriv)
             add_assumption_doc(
                 type="model assumption",
                 name="Usage of Gaussian correction",
@@ -179,6 +162,26 @@ class StockExtrapolation:
                 description=(
                     "Zeroth order correction is used to match the last historic point with the "
                     "extrapolated stock."
+                ),
+            )
+        elif self.stock_correction == "cubic_spline":
+            prediction_out[...] = self.cubic_spline_correction(historic_in, pure_prediction, self.n_deriv)
+            add_assumption_doc(
+                type="model assumption",
+                name="Usage of Cubic Hermite spline correction",
+                description=(
+                    "Cubic Hermite Spline correction is used to smoothly blend historic trends "
+                    "with the extrapolation."
+                ),
+            )
+        elif self.stock_correction == "quintic_spline":
+            prediction_out[...] = self.quintic_spline_correction(historic_in, pure_prediction, self.n_deriv)
+            add_assumption_doc(
+                type="model assumption",
+                name="Usage of Quintic Hermite spline correction",
+                description=(
+                    "Quintic Hermite Spline correction is used to smoothly blend historic trends "
+                    "with the extrapolation."
                 ),
             )
 
@@ -262,3 +265,241 @@ class StockExtrapolation:
         correction = corr0 + corr1
 
         return prediction[...] + correction
+
+    def cubic_spline_correction(self, historic: np.ndarray, prediction: np.ndarray, n: int = 5) -> np.ndarray:
+        """
+        Smoothly corrects the beginning of a prediction series to connect it to a historic series.
+
+        This function uses a Cubic Hermite Spline to create a transition. The start of the
+        spline is determined by the last point and slope of the `historic` data. The end
+        of the spline is chosen algorithmically from the `prediction` data by finding the
+        endpoint `c` that results in the smoothest possible curve, minimizing the integral
+        of the squared second derivative.
+
+        Args:
+            historic: A 1D NumPy array of historical values (y1).
+            prediction: A 1D NumPy array of predicted values (y2) that follows the historic data.
+                        This is the array that will be modified.
+
+        Returns:
+            A new NumPy array containing the corrected prediction, with a smooth
+            transition from the end of the history.
+        """
+        time = np.array(self.dims["t"].items)
+
+        # Starting point
+        last_history_idx = len(historic) - 1
+        x_start = time[last_history_idx]
+        y_start = historic[-1]
+
+        # Starting point derivative
+        fit_indices = np.arange(last_history_idx - n + 1, last_history_idx + 1)
+        time_fit = time[fit_indices]
+        historic_fit = historic[fit_indices]
+        coeffs = np.polyfit(time_fit, historic_fit, 1)
+        y_prime_start = coeffs[0]
+
+        # End point
+        end_idx = self.find_optimal_spline_endpoint(
+            time=time,
+            prediction=prediction,
+            x_start=x_start,
+            y_start=y_start,
+            y_prime_start=y_prime_start,
+            start_idx=last_history_idx,
+            n=n
+        )
+        print(f"Optimal endpoint found at time t={time[end_idx]:.2f} (index {end_idx})")
+        x_end = time[end_idx]
+        y_end = prediction[end_idx]
+
+        # End point derivative
+        fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
+        time_fit = time[fit_indices]
+        prediction_fit = prediction[fit_indices]
+        coeffs = np.polyfit(time_fit, prediction_fit, 1)
+        y_prime_end = coeffs[0]
+
+        # Create the Hermite spline
+        final_spline = CubicHermiteSpline(
+            x=[x_start, x_end],
+            y=np.vstack([[y_start], [y_end]]),
+            dydx=np.vstack([[y_prime_start], [y_prime_end]])
+        )
+
+        # Construct the corrected prediction
+        corrected_prediction = prediction.copy()
+
+        # Before transition, keep historic values
+        corrected_prediction[:last_history_idx + 1] = historic
+
+        # In the transition period, apply the spline
+        transition_indices = np.arange(last_history_idx, end_idx + 1)
+        transition_times = time[transition_indices]
+        corrected_prediction[transition_indices] = final_spline(transition_times)
+
+        return corrected_prediction
+    
+    def _calculate_spline_roughness(self, p0, m0, p1, m1, h):
+        """
+        Calculates the integral of the squared second derivative for a cubic Hermite spline.
+
+        This value serves as a measure of the spline's "roughness" or "bending energy".
+        A lower value means a smoother curve. The formula is derived from the coefficients
+        of the cubic polynomial that defines the spline.
+
+        Args:
+            p0 (float): Start point value (y_start).
+            m0 (float): Start point derivative (y_prime_start).
+            p1 (float): End point value (y_end).
+            m1 (float): End point derivative (y_prime_end).
+            h (float): The length of the interval (x_end - x_start).
+
+        Returns:
+            float: The roughness cost of the spline.
+        """
+        if h < 1e-6:  # Avoid division by zero for very small intervals
+            return np.inf
+
+        # This is the analytical solution for the integral of (P''(x))^2 dx from x0 to x1.
+        term1 = 4 * (m1**2 + m0 * m1 + m0**2) / h
+        term2 = 12 * (p1 - p0) * (m0 + m1) / (h**2)
+        term3 = 12 * (p1 - p0)**2 / (h**3)
+        
+        return term1 - term2 + term3
+    
+    def find_optimal_spline_endpoint(
+            self, time: np.ndarray, prediction: np.ndarray, x_start: float, y_start: float, y_prime_start: float, start_idx: int, n: int = 5, search_range_years: tuple = (30, 150)
+        ) -> int:
+        """
+        Finds the optimal endpoint for the Hermite spline by minimizing curvature.
+
+        It iterates through a specified range of potential endpoints in the prediction
+        data, creates a hypothetical spline for each, and calculates its roughness.
+        The endpoint that yields the smoothest spline (minimum roughness) is chosen.
+
+        Args:
+            time: The array of time values.
+            prediction: The array of predicted values.
+            x_start: The starting time for the spline.
+            y_start: The starting value for the spline.
+            y_prime_start: The starting derivative for the spline.
+            start_idx: The index in the time/prediction array corresponding to x_start.
+            n: The number of points to use for linear regression to find derivatives.
+            search_range_years: A tuple defining the min and max years from the start
+                                to search for an optimal endpoint.
+
+        Returns:
+            The index of the optimal endpoint in the prediction array.
+        """
+        min_roughness = np.inf
+        optimal_end_idx = -1
+
+        # Define the search space in terms of array indices
+        min_end_time = x_start + search_range_years[0]
+        max_end_time = x_start + search_range_years[1]
+        
+        start_search_idx = np.searchsorted(time, min_end_time, side='left')
+        end_search_idx = np.searchsorted(time, max_end_time, side='right')
+        
+        # Ensure the search range is valid and within array bounds
+        start_search_idx = max(start_idx + n + 1, start_search_idx)
+        end_search_idx = min(len(prediction) - (n + 1), end_search_idx)
+
+        if start_search_idx >= end_search_idx:
+            raise ValueError("Search range for optimal endpoint is invalid or empty.")
+
+        for end_idx in range(start_search_idx, end_search_idx):
+            # Define potential endpoint
+            x_end = time[end_idx]
+            y_end = prediction[end_idx]
+            
+            # Calculate endpoint derivative
+            fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
+            time_fit = time[fit_indices]
+            prediction_fit = prediction[fit_indices]
+            coeffs = np.polyfit(time_fit, prediction_fit, 1)
+            y_prime_end = coeffs[0]
+
+            # Calculate the roughness of this potential spline
+            interval_h = x_end - x_start
+            roughness = self._calculate_spline_roughness(y_start, y_prime_start, y_end, y_prime_end, interval_h).sum()
+
+            if roughness < min_roughness:
+                min_roughness = roughness
+                optimal_end_idx = end_idx
+        
+        if optimal_end_idx == -1:
+             raise RuntimeError("Could not find an optimal endpoint. Check search range and data.")
+
+        return optimal_end_idx
+
+    def quintic_spline_correction(self, historic: np.ndarray, prediction: np.ndarray, n: int = 5, transition_years = 20) -> np.ndarray:
+        """
+        Smoothly corrects the beginning of a prediction series to connect it to a historic series
+        using a quintic Hermite spline (BPoly).
+
+        This function uses `scipy.interpolate.BPoly.from_derivatives` to create a transition
+        over a fixed duration. The spline is defined by the position, first derivative, and
+        second derivative at its start and end points.
+
+        Args:
+            historic: A 1D NumPy array of historical values.
+            prediction: A 1D NumPy array of predicted values that will be modified.
+            n: The number of points to use for polynomial fitting to find derivatives.
+            transition_years: The fixed duration of the spline transition in time units.
+
+        Returns:
+            A new NumPy array containing the corrected prediction, with a smooth
+            transition from the end of the history.
+        """
+        time = np.array(self.dims["t"].items)
+
+        # Starting point
+        last_history_idx = len(historic) - 1
+        x_start = time[last_history_idx]
+        y_start = historic[-1]
+
+        # Starting point derivative
+        fit_indices = np.arange(last_history_idx - n + 1, last_history_idx + 1)
+        time_fit = time[fit_indices]
+        historic_fit = historic[fit_indices]
+        coeffs_start = np.polyfit(time_fit, historic_fit, 2)
+        y_prime_start = 2 * coeffs_start[0] * x_start + coeffs_start[1]
+        y_prime2_start = 2 * coeffs_start[0]
+
+        # End point
+        x_end_target = x_start + transition_years
+        end_idx = np.searchsorted(time, x_end_target)
+        x_end = time[end_idx]
+        y_end = prediction[end_idx]
+
+        # End point derivative
+        fit_indices = np.arange(end_idx - n + 1, end_idx + 1)
+        time_fit = time[fit_indices]
+        prediction_fit = prediction[fit_indices]
+        coeffs_end = np.polyfit(time_fit, prediction_fit, 2)
+        y_prime_end = 2 * coeffs_end[0] * x_end + coeffs_end[1]
+        y_prime2_end = 2 * coeffs_end[0]
+
+        # Create the Hermite spline
+        final_spline = BPoly.from_derivatives(
+            xi=[x_start, x_end],
+            yi=[
+                [y_start, y_prime_start, y_prime2_start],
+                [y_end, y_prime_end, y_prime2_end]
+            ]
+        )
+
+        # Construct the corrected prediction
+        corrected_prediction = prediction.copy()
+
+        # Before transition, keep historic values
+        corrected_prediction[:last_history_idx + 1] = historic
+
+        # In the transition period, apply the spline
+        transition_indices = np.arange(last_history_idx, end_idx + 1)
+        transition_times = time[transition_indices]
+        corrected_prediction[transition_indices] = final_spline(transition_times)
+
+        return corrected_prediction
