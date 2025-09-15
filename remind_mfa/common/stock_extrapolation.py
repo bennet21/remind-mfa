@@ -2,7 +2,7 @@ import flodym as fd
 import numpy as np
 from typing import Tuple, Union, Type
 from scipy.interpolate import CubicHermiteSpline, BPoly
-from scipy.optimize import minimize
+from scipy.optimize import minimize, basinhopping, Bounds
 
 from remind_mfa.common.data_extrapolations import Extrapolation
 from remind_mfa.common.data_transformations import broadcast_trailing_dimensions, BoundList
@@ -258,14 +258,18 @@ class StockExtrapolation:
         return prediction[...] + correction
     
     @staticmethod
-    def derivatives_from_polyfit(x, y, idx, n):
-            fit_indices = np.arange(idx - n + 1, idx + 1)
-            time_fit = x[fit_indices]
-            prediction_fit = y[fit_indices]
-            coeffs_end = np.polyfit(time_fit, prediction_fit, 2, w=np.linspace(1, 2, len(time_fit)))
-            y_prime_end = 2 * coeffs_end[0] * x[idx] + coeffs_end[1]
-            y_prime2_end = 2 * coeffs_end[0]
-            return y_prime_end, y_prime2_end
+    def derivatives_from_polyfit(x, y, idx, n, deg=2):
+            fit_indices = range(idx - n + 1, idx + 1)
+            x_fit = x[fit_indices]
+            y_fit = y[fit_indices]
+            coeffs_end = np.polyfit(x_fit, y_fit, deg, w=np.linspace(1, 2, len(x_fit)))
+            if deg == 1:
+                y_prime_end = coeffs_end[0]
+                return y_prime_end
+            if deg == 2:
+                y_prime_end = 2 * coeffs_end[0] * x[idx] + coeffs_end[1]
+                y_prime2_end = 2 * coeffs_end[0]
+                return y_prime_end, y_prime2_end
 
     def quintic_spline_correction(
             self,
@@ -300,7 +304,7 @@ class StockExtrapolation:
         ys_start = historic[-1]
 
         # Starting point derivatives
-        ys_prime_start, ys_prime2_start = self.derivatives_from_polyfit(time, historic, last_history_idx, n_start)
+        ys_prime_start = self.derivatives_from_polyfit(time, historic, last_history_idx, n_start, deg=1)
 
         # Construct the corrected prediction
         corrected_prediction = prediction.copy()
@@ -311,15 +315,16 @@ class StockExtrapolation:
         # create spline for each independent dimension (except time)
         # TODO make this agnostic of position of time dimension
         for ndi in np.ndindex(prediction.shape[1:]):
-            this_prediction = prediction[:, ndi].squeeze()
+            this_prediction = corrected_prediction[:, ndi].squeeze()
 
+            # start point constraints
             # x_start stays the same
             y_start = ys_start[ndi]
             y_prime_start = ys_prime_start[ndi]
-            y_prime2_start = ys_prime2_start[ndi]
+            y_prime2_start = 0
 
             # find optimal paramters for the spline
-            x_end = self.optimize_quintic_spline(
+            y_prime_start, y_prime2_start, x_end = self.optimize_quintic_spline(
                 time=time,
                 prediction=this_prediction,
                 last_history_idx=last_history_idx,
@@ -330,22 +335,22 @@ class StockExtrapolation:
                 n_end=n_end,
             )
 
-            # Extract values related to end point
+            # End point constraints, extracted from optimization
             end_idx = np.searchsorted(time, x_end)
             y_end = this_prediction[end_idx]
             y_prime_end, y_prime2_end = self.derivatives_from_polyfit(time, this_prediction, end_idx, n_end)
 
             # Create the Hermite spline
             final_spline = BPoly.from_derivatives(
-                xi=[x_start.item(), x_end.item()],
+                xi=[x_start, x_end],
                 yi=[
-                    np.vstack([y_start.item(), y_prime_start.item(), y_prime2_start.item()]),
-                    np.vstack([y_end.item(), y_prime_end.item(), y_prime2_end.item()])
+                    np.vstack([y_start, y_prime_start, y_prime2_start]),
+                    np.vstack([y_end, y_prime_end, y_prime2_end])
                 ]
             )
 
             # In the transition period, apply the spline
-            transition_indices = np.arange(last_history_idx, end_idx)
+            transition_indices = np.arange(last_history_idx + 1, end_idx + 1)
             transition_times = time[transition_indices]
             corrected_prediction[transition_indices, ndi] = final_spline(transition_times).squeeze()
 
@@ -399,7 +404,7 @@ class StockExtrapolation:
             y_prime_start: np.ndarray,
             y_prime2_start: np.ndarray,
             n_end: int = 5,
-            search_range_years: tuple = (20, 100),
+            search_range_years: tuple = (1, 50), # TODO one could allow longer transitions, if there is an extra blend to pure prediction (e.g., simple weight based)
         ) -> np.ndarray:
         """
         Finds the optimal endpoint for a quintic Hermite spline by minimizing jerk.
@@ -424,15 +429,18 @@ class StockExtrapolation:
         Returns:
             The array of optimal endpoint indices in the prediction array.
         """
+        # normalization factors
+        print("Start optimization ...")
+        y_prime_norm = max(self._calculate_velocity(prediction))
+        y_prime2_norm = max(self._calculate_acceleration(prediction)) ** 2
+        jerk_norm = self._calculate_jerk(prediction) ** 2
         
         def cost_function(x):
-            x_1 = x
+            y_prime_0, y_prime2_0, x_1 = x
 
             # fixed values
             x_0 = x_start
             y_0 = y_start
-            y_prime_0 = y_prime_start
-            y_prime2_0 = y_prime2_start
 
             # Extract values related to end point
             end_idx = np.searchsorted(time, x_1)
@@ -440,40 +448,69 @@ class StockExtrapolation:
             y_prime_1, y_prime2_1 = self.derivatives_from_polyfit(time, prediction.squeeze(), end_idx, n_end)
 
             spline = BPoly.from_derivatives(
-                xi=[x_0.item(), x_1.item()],
+                xi=[x_0, x_1],
                 yi=[
-                    np.vstack([y_0.item(), y_prime_0.item(), y_prime2_0.item()]),
-                    np.vstack([y_1.item(), y_prime_1.item(), y_prime2_1.item()])
+                    np.vstack([y_0, y_prime_0, y_prime2_0]),
+                    np.vstack([y_1, y_prime_1, y_prime2_1])
                 ]
             )
 
-            times = np.arange(x_0, x_1, 1) # TODO adjust step size to time resolution
+            times = range(x_0, x_1) # TODO adjust step size to time resolution
 
             transition_spline = spline([times]).squeeze()
 
             new_prediction = prediction.copy()
-            new_prediction[last_history_idx:end_idx.item()] = transition_spline
+            new_prediction[last_history_idx:end_idx] = transition_spline
 
-            jerk = self._calculate_jerk(new_prediction) / self._calculate_jerk(prediction)
-            y_prime_1_error = (y_prime_1 - y_prime_start) ** 2
-            y_prime2_1_error = (y_prime2_1 - y_prime2_start) ** 2
+            # don't include too much from hitory to save computation time
+            jerk = self._calculate_jerk(new_prediction[last_history_idx - 5:]) / jerk_norm
+            y_prime_1_error = (y_prime_0 - y_prime_start) ** 2 / y_prime_norm
 
-            w1 = 1.0
-            w2 = 1e5
-            w3 = 1e5
+            jerk_cost = jerk
+            vel_cost =  1e1 * y_prime_1_error # TODO why is velocity constraint never fulfilled, even at higher weights?
+            acc_cost =  0 # 1e-3 * y_prime2_1_error set to zero for now to give extra degrees of freedom
 
-            cost = w1 * jerk + w2 * y_prime_1_error + w3 * y_prime2_1_error
+            # print(f"Trying end time {x_1:.1f}: y_prime {y_prime_1:.3e} (start {y_prime_start:.3e}), y_prime2 {y_prime2_1:.3e} (start {y_prime2_start:.3e})")
+            # print(f"Trying end time {x_1:.1f}: jerk {jerk_cost:.3e}, vel {vel_cost:.3e}, acc {acc_cost:.3e}")
+
+            cost = jerk_cost + vel_cost + acc_cost
             return cost
         
         # Define the search space in terms of array indices
         min_end_time = x_start + search_range_years[0]
         max_end_time = np.minimum(x_start + search_range_years[1], time[-1])
         
-        initial_guess = np.array([(min_end_time + max_end_time) / 2,])#[y_prime_start, y_prime2_start, (min_end_time + max_end_time) / 2]
-        bounds = [(min_end_time, max_end_time)]#[[-np.inf, np.inf], [-np.inf, np.inf], [min_end_time, max_end_time]]
-        optimized = minimize(cost_function, initial_guess, bounds=bounds)
+        initial_guess = [y_prime_start, y_prime2_start, (min_end_time + max_end_time) / 2]
+        bounds = Bounds([-np.inf, -np.inf, min_end_time], [np.inf, np.inf, max_end_time])
+
+        minimizer_kwargs = {
+            "method": "L-BFGS-B",
+            "bounds": bounds
+        }
+
+        optimized = basinhopping(
+            cost_function,
+            initial_guess,
+            minimizer_kwargs=minimizer_kwargs,
+            niter=100,
+            disp=False
+        )
+        # optimized = minimize(cost_function, initial_guess, bounds=bounds)
+
+        # print("End optimization...")
 
         return optimized.x
+    
+    @staticmethod
+    def _calculate_velocity(x, dt=1.0):
+        if len(x) < 2:
+            return np.inf
+        v = np.gradient(x, dt, axis=0)
+        return v
+    
+    def _calculate_acceleration(self, x, dt=1.0):
+        a = self._calculate_velocity(self._calculate_velocity(x, dt), dt)
+        return a
     
     @staticmethod
     def _calculate_jerk(x, dt=1.0):
