@@ -57,15 +57,15 @@ class CementDataExporter(CommonDataExporter):
         self.stop_and_show()
 
     def visualize_production(
-        self, mfa: fd.MFASystem, production: fd.Flow, name: str, regional: bool = False
+        self, mfa: fd.MFASystem, production: fd.Flow, name: str, regional: bool = False, stacked: bool = False
     ):
+        if regional and stacked:
+            logging.warning("Cannot do stacked regional production plots, switching to non-stacked.")
+            stacked = False
 
         x_array = None
-        # intra_line_dim = "Time"
-        # line_label = f"{name} Production"
         x_label = "Year"
         y_label = "Production [t]"
-        linecolor_dim = None
         plot_letters = ["t"]
 
         if regional:
@@ -77,23 +77,41 @@ class CementDataExporter(CommonDataExporter):
             subplot_dim = None
             regional_tag = "_global"
             title = f"Global {name} Production"
+            if stacked:
+                plot_letters += ["r"]
 
         other_letters = tuple(
             letter for letter in production.dims.letters if letter not in plot_letters
         )
         production = production.sum_over(other_letters)
 
-        fig, ap_production = self.plot_history_and_future(
-            mfa=mfa,
-            data_to_plot=production,
-            subplot_dim=subplot_dim,
-            x_array=x_array,
-            linecolor_dim=linecolor_dim,
-            x_label=x_label,
-            y_label=y_label,
-            title=title,
-            line_label="Production",
-        )
+        if stacked:
+            region_idx = production.dims.index("r")
+            production = production.apply(np.cumsum, kwargs={"axis": region_idx})
+            ap_production = self.plotter_class(
+                array=production,
+                intra_line_dim="Time",
+                linecolor_dim="Region",
+                chart_type="area",
+                display_names=self._display_names,
+                title=title,
+                x_label=x_label,
+                y_label=y_label,
+            )
+            fig = ap_production.plot()
+        else:
+            linecolor_dim = None
+            fig, ap_production = self.plot_history_and_future(
+                mfa=mfa,
+                data_to_plot=production,
+                subplot_dim=subplot_dim,
+                x_array=x_array,
+                linecolor_dim=linecolor_dim,
+                x_label=x_label,
+                y_label=y_label,
+                title=title,
+                line_label="Production",
+            )
 
         self.plot_and_save_figure(
             ap_production, f"{name}_production{regional_tag}.png", do_plot=False
@@ -105,7 +123,7 @@ class CementDataExporter(CommonDataExporter):
 
     def visualize_prod_cement(self, mfa: fd.MFASystem, regional: bool = False):
         production = mfa.flows["prod_cement => prod_product"]
-        self.visualize_production(mfa=mfa, production=production, name="Cement", regional=regional)
+        self.visualize_production(mfa=mfa, production=production, name="Cement", regional=regional, stacked=True)
 
     def visualize_prod_product(self, mfa: fd.MFASystem):
         production = mfa.flows["prod_product => use"].sum_over("s")
