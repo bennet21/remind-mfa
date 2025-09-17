@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import model_validator
 import flodym as fd
 import flodym.export as fde
+from functools import partial
 
 from remind_mfa.common.base_model import RemindMFABaseModel
 from remind_mfa.common.common_cfg import VisualizationCfg, ExportCfg
@@ -82,12 +83,24 @@ class CommonDataExporter(RemindMFABaseModel):
 
     @property
     def plotter_class(self):
+        step = self.cfg.plot_step
+        color_map = self.color_map
         if self.cfg.plotting_engine == "plotly":
-            return fde.PlotlyArrayPlotter
+            return partial(fde.PlotlyArrayPlotter, step=step, color_map=color_map)
         elif self.cfg.plotting_engine == "pyplot":
-            return fde.PyplotArrayPlotter
+            return partial(fde.PyplotArrayPlotter, step=step, color_map=color_map)
         else:
             raise ValueError(f"Unknown plotting engine: {self.cfg.plotting_engine}")
+        
+    @property
+    def color_map(self):
+        if self.cfg.color_map is None:
+            return None
+        if self.cfg.color_map == "custom_pastel":
+            return ["#BFCDD9", "#A4A9BB", "#A5B8C4",
+                    "#F0CCC5", "#F0D9C9", "#CBF0CA",
+                    "#DBE902","#EFF2CF", "#F1B2BE",
+                    "#D5B3BE", "#D7C1C3", "#A28CAA"]
 
     def visualize_use_stock(
         self, mfa: fd.MFASystem, stock: fd.FlodymArray, subplot_dim: str = None

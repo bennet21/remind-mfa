@@ -61,6 +61,8 @@ class VisualizationCfg(RemindMFABaseModel):
     do_save_figs: bool = False
     plotting_engine: str = "plotly"
     plotly_renderer: str = "browser"
+    plot_step: int = 1
+    color_map: Optional[str] = None
 
 
 class CementVisualizationCfg(VisualizationCfg):
