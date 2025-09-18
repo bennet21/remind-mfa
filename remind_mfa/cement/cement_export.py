@@ -352,7 +352,9 @@ class CementDataExporter(CommonDataExporter):
         mfa = model.future_mfa
         cement_ratio = mfa.parameters["product_cement_content"] / mfa.parameters["product_density"]
         subplot_dim = "Region"
-        linecolor_dim = "Stock Type"
+        linecolor_dim = "Reduced Stock Type"
+        reduced_stock_type_dim = fd.Dimension(name="Reduced Stock Type", letter="z", items=["Res", "Com"])
+        reduced_time_dim = fd.Dimension(name="Reduced Time", letter="y", items=np.arange(1990, 2023))
         stock = mfa.stocks["in_use"].stock
         if material == "cement":
             stock = stock * cement_ratio
@@ -371,6 +373,7 @@ class CementDataExporter(CommonDataExporter):
         x_label = "Year"
         y_label = f"{material.capitalize()} Stock{pc_str} [t]"
         title = f"{material.capitalize()} Stock Comparison: Buttom-up SD vs Top-down Extrapolation"
+        # TODO: time slicing does not work with gdp plotting yet
         if self.cfg.sd["over_gdp"]:
             title = title + f" over GDP{pc_str}"
             x_label = f"GDP/PPP{pc_str} [2005 USD]"
@@ -390,28 +393,34 @@ class CementDataExporter(CommonDataExporter):
             stock = stock / population
             stock_sd = stock_sd / population
 
+        # remove mortar from stock before summing (for fair comparison)
+        stock[{"m": "mortar"}][...] = 0
         other_dimletters = tuple(letter for letter in stock.dims.letters if letter not in dimlist)
+        
         stock = stock.sum_over(other_dimletters)
+        stock = stock[{"s": reduced_stock_type_dim}][{"t": reduced_time_dim}]
 
         # service demand stock
         other_dimletters_sd = tuple(letter for letter in stock_sd.dims.letters if letter not in dimlist)
         stock_sd = stock_sd.sum_over(other_dimletters_sd)
+        stock_sd = stock_sd[{"s": reduced_stock_type_dim}][{"t": reduced_time_dim}]
 
-        fig, ap_final_stock = self.plot_history_and_future(
-            mfa=mfa,
-            data_to_plot=stock,
-            linecolor_dim=linecolor_dim,
+        ap_final_stock = self.plotter_class(
+            array=stock,
+            intra_line_dim="Reduced Time",
             subplot_dim=subplot_dim,
+            linecolor_dim=linecolor_dim,
             x_array=x_array,
             x_label=x_label,
             y_label=y_label,
             title=title,
         )
+        fig = ap_final_stock.plot()
 
         # SD
         ap_pure_prediction = self.plotter_class(
             array=stock_sd,
-            intra_line_dim="Time",
+            intra_line_dim="Reduced Time",
             subplot_dim=subplot_dim,
             linecolor_dim=linecolor_dim,
             x_array=x_array,
@@ -423,15 +432,22 @@ class CementDataExporter(CommonDataExporter):
 
         self.plot_and_save_figure(
             ap_pure_prediction,
-            f"stocks_extrapolation.png",
+            f"SD_stocks_extrapolation.png",
             do_plot=False,
         )
 
-    def visualize_top_vs_bottom(self, model: "CementModel", material="concrete"):
+    def visualize_top_vs_bottom(self, model: "CementModel", material="concrete", only_sector: bool = False):
         mfa = model.future_mfa
 
         stock_sd = self.calculate_sd_stock(model, material=material).sum_over(("s", "b", "f", "m", "a"))
-        stock = mfa.stocks["in_use"].stock.sum_over(("s", "m", "a"))
+        # remove mortar from stock before summing (for fair comparison)
+        stock = mfa.stocks["in_use"].stock
+        stock[{"m": "mortar"}][...] = 0
+        if only_sector:
+            # remove Civ, Ind from stock before summing (for fair comparison)
+            stock[{"s": "Civ"}][...] = 0
+            stock[{"s": "Ind"}][...] = 0
+        stock = stock.sum_over(("s", "m", "a"))
         gdppc = mfa.parameters["gdppc"]
 
         cut_time = fd.Dimension(name="CutTime", letter="p", items=np.arange(1999, 2024))
