@@ -331,16 +331,15 @@ class CementDataExporter(CommonDataExporter):
         cement_ratio = model.future_mfa.parameters["product_cement_content"] / model.future_mfa.parameters["product_density"]
         # customize split for SD: no knowledge about mortar use
         pms = prm["product_material_split"]
-        # TODO: this is not how it should be done. The ideal solution is pms[{"m": "mortar"}] = 0, but it somehow sets the whole array to zero, also concrete
-        pms.values[:,1] = 0 # set mortar to zero
+        pms[{"m": "mortar"}][...] = 0 # set mortar to zero
         product_application_material_split = prm["product_application_split"] * pms  * prm["product_material_application_transform"]
         
         bf = prm["buildings_floorspace"]
-        bf = fd.FlodymArray(dims=model.dims[("t", "r", "b", "f", "m", "a")])
+        bf = fd.FlodymArray(dims=model.dims[("t", "r", "s", "b", "f", "m", "a")])
         big_bf = prm["buildings_floorspace"] * prm["building_split"] * product_application_material_split
-        bf[{"f": "Com"}][...] = big_bf[{"s": "Com", "f": "Com"}]
-        bf[{"f": "RS"}][...] = big_bf[{"s": "Res", "f": "RS"}]
-        bf[{"f": "RM"}][...] = big_bf[{"s": "Res", "f": "RM"}]
+        bf[{"s": "Com", "f": "Com"}][...] = big_bf[{"s": "Com", "f": "Com"}]
+        bf[{"s": "Res", "f": "RS"}][...] = big_bf[{"s": "Res", "f": "RS"}]
+        bf[{"s": "Res", "f": "RM"}][...] = big_bf[{"s": "Res", "f": "RM"}]
         
         stock =  bf * prm["concrete_building_mi"]
         if material == "cement":
@@ -353,6 +352,7 @@ class CementDataExporter(CommonDataExporter):
         mfa = model.future_mfa
         cement_ratio = mfa.parameters["product_cement_content"] / mfa.parameters["product_density"]
         subplot_dim = "Region"
+        linecolor_dim = "Stock Type"
         stock = mfa.stocks["in_use"].stock
         if material == "cement":
             stock = stock * cement_ratio
@@ -379,12 +379,12 @@ class CementDataExporter(CommonDataExporter):
                 x_array = x_array * population
 
         if subplot_dim is None:
-            dimlist = ["t"]
+            dimlist = ["t", "s"]
         else:
             subplot_dimletter = next(
                 dimlist.letter for dimlist in mfa.dims.dim_list if dimlist.name == subplot_dim
             )
-            dimlist = ["t", subplot_dimletter]
+            dimlist = ["t", "s", subplot_dimletter]
         
         if per_capita:
             stock = stock / population
@@ -397,17 +397,15 @@ class CementDataExporter(CommonDataExporter):
         other_dimletters_sd = tuple(letter for letter in stock_sd.dims.letters if letter not in dimlist)
         stock_sd = stock_sd.sum_over(other_dimletters_sd)
 
-        
-
         fig, ap_final_stock = self.plot_history_and_future(
             mfa=mfa,
             data_to_plot=stock,
+            linecolor_dim=linecolor_dim,
             subplot_dim=subplot_dim,
             x_array=x_array,
             x_label=x_label,
             y_label=y_label,
             title=title,
-            line_label="Historic + Modelled Future",
         )
 
         # SD
@@ -415,11 +413,11 @@ class CementDataExporter(CommonDataExporter):
             array=stock_sd,
             intra_line_dim="Time",
             subplot_dim=subplot_dim,
+            linecolor_dim=linecolor_dim,
             x_array=x_array,
             title=title,
             fig=fig,
             line_type="dot",
-            line_label="SD Stock",
         )
         fig = ap_pure_prediction.plot()
 
@@ -432,7 +430,7 @@ class CementDataExporter(CommonDataExporter):
     def visualize_top_vs_bottom(self, model: "CementModel", material="concrete"):
         mfa = model.future_mfa
 
-        stock_sd = self.calculate_sd_stock(model, material=material).sum_over(("b", "f", "m", "a"))
+        stock_sd = self.calculate_sd_stock(model, material=material).sum_over(("s", "b", "f", "m", "a"))
         stock = mfa.stocks["in_use"].stock.sum_over(("s", "m", "a"))
         gdppc = mfa.parameters["gdppc"]
 
