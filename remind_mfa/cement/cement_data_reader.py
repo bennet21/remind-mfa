@@ -12,4 +12,6 @@ class CementDataReader(CustomDataReader):
         "Waste Type": "waste_types",
         "Waste Size": "waste_sizes",
         "Carbonation Location": "carbonation_locations",
+        "Structure": "structures",
+        "Function": "functions",
     }

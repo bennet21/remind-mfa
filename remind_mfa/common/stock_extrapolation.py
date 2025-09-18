@@ -182,7 +182,7 @@ class StockExtrapolation:
                 ),
             )
 
-        # save extrapolation data for later analysis
+        # save projection for later analysis
         self.pure_prediction = fd.FlodymArray(dims=self.stocks_pc.dims, values=pure_prediction)
 
         prediction_out[:n_historic, ...] = historic_in

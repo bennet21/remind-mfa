@@ -17,6 +17,9 @@ def get_definition(cfg: GeneralCfg, historic: bool):
         fd.DimensionDefinition(name="Waste Type", dim_letter="w", dtype=str),
         fd.DimensionDefinition(name="Waste Size", dim_letter="p", dtype=str),
         fd.DimensionDefinition(name="Carbonation Location", dim_letter="c", dtype=str),
+        # SD
+        fd.DimensionDefinition(name="Structure", dim_letter="b", dtype=str), # b for building
+        fd.DimensionDefinition(name="Function", dim_letter="f", dtype=str),
     ]
 
     # 2) Processes
@@ -189,6 +192,10 @@ def get_definition(cfg: GeneralCfg, historic: bool):
             name="waste_size_max",
             dim_letters=("w", "p"),
         ),  # manual (from Xi2016 categories)
+        # SD parameters
+        fd.ParameterDefinition(name="concrete_building_mi", dim_letters=("r", "f", "b")),
+        fd.ParameterDefinition(name="building_split", dim_letters=("r", "b", "f")),
+        fd.ParameterDefinition(name="buildings_floorspace", dim_letters=("t", "r", "s")),
     ]
 
     return fd.MFADefinition(
