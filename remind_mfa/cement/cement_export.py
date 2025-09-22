@@ -1,7 +1,7 @@
 from plotly import colors as plc
 import numpy as np
 import flodym as fd
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 import numpy as np
 import logging
 
@@ -65,16 +65,30 @@ class CementDataExporter(CommonDataExporter):
             self.visualize_top_vs_bottom(model=model)
         self.stop_and_show()
 
+    # override previous function to produce plots for presentation
+    def visualize_results(self, model: "CementModel"):
+        mfa: StockDrivenCementMFASystem = model.future_mfa
+        self.visualize_extrapolation(model=model, show_extrapolation=False, show_future=False)
+        self.visualize_extrapolation(model=model, show_future=False)
+        self.visualize_extrapolation(model=model)
+        self.visualize_prod_cement(mfa=mfa, regional=False, stacked="r", width=1000, height=500, name_add="Regionstack_")
+        self.visualize_prod_cement(mfa=mfa, regional=False, stacked="s", width=500, height=300, name_add="Sectorstack_")
+        self.visualize_sd(model=model, regional=False, material="cement", width=500, height=500, name="SD stock visualization cement")
+        self.visualize_top_vs_bottom(model=model, width=500, height=500)
+        self.visualize_top_vs_bottom(model=model, width=500, height=500, only_sector="Res")
+        self.visualize_top_vs_bottom(model=model, width=500, height=500, only_sector="Com")
+
     def visualize_production(
-        self, mfa: fd.MFASystem, production: fd.Flow, name: str, regional: bool = False, stacked: bool = False
+        self, mfa: fd.MFASystem, production: fd.Flow, name: str, regional: bool = False, stacked: Optional[str] = "r",
+        width: int = 1000, height: int = 500, minimal: bool = True
     ):
-        if regional and stacked:
-            logging.warning("Cannot do stacked regional production plots, switching to non-stacked.")
-            stacked = False
+        if regional and stacked == "r":
+            logging.warning("Cannot create regional stacked plot with regional subplots, switching to non-stacked.")
+            stacked = None
 
         x_array = None
         x_label = "Year"
-        y_label = "Production [t]"
+        y_label = f"Cement Production [t]"
         plot_letters = ["t"]
 
         if regional:
@@ -86,28 +100,45 @@ class CementDataExporter(CommonDataExporter):
             subplot_dim = None
             regional_tag = "_global"
             title = f"Global {name} Production"
-            if stacked:
-                plot_letters += ["r"]
+
+        if stacked is not None:
+            plot_letters += [stacked]
 
         other_letters = tuple(
             letter for letter in production.dims.letters if letter not in plot_letters
         )
         production = production.sum_over(other_letters)
+        if minimal:
+            title = None
+            x_label = ""
 
-        if stacked:
-            region_idx = production.dims.index("r")
-            production = production.apply(np.cumsum, kwargs={"axis": region_idx})
+        if stacked is not None:
+            stack_idx = production.dims.index(stacked)
+            production = production.apply(np.cumsum, kwargs={"axis": stack_idx})
             ap_production = self.plotter_class(
                 array=production,
                 intra_line_dim="Time",
-                linecolor_dim="Region",
+                subplot_dim=subplot_dim,
+                linecolor_dim=production.dims[stacked].name,
                 chart_type="area",
                 display_names=self._display_names,
                 title=title,
-                x_label=x_label,
-                y_label=y_label,
+                xlabel=x_label,
+                ylabel=y_label,
             )
             fig = ap_production.plot()
+
+            fig.add_shape(
+                type="line",
+                x0=2023, y0=0, x1=2023, y1=1,
+                line=dict(
+                    color="gray",
+                    width=2,
+                    dash="dash" # Use "dash" for a dashed line
+                    ),
+                xref="x", # Use data coordinates for the x-axis
+                yref="paper" # Use paper coordinates for the y-axis
+            )
         else:
             linecolor_dim = None
             fig, ap_production = self.plot_history_and_future(
@@ -122,17 +153,33 @@ class CementDataExporter(CommonDataExporter):
                 line_label="Production",
             )
 
+        fig.update_layout(
+            legend=dict(
+                x=0,
+                y=1,
+                xanchor='left',
+                yanchor='top'
+            )
+        )
+
+        fig.update_layout(
+            yaxis=dict(
+                side='right'
+            )
+        )
+
         self.plot_and_save_figure(
-            ap_production, f"{name}_production{regional_tag}.png", do_plot=False
+            ap_production, f"{name}_production{regional_tag}.png", do_plot=False,
+            width=width, height=height
         )
 
     def visualize_prod_clinker(self, mfa: fd.MFASystem):
         production = mfa.flows["prod_clinker => prod_cement"]
         self.visualize_production(mfa=mfa, production=production, name="Clinker")
 
-    def visualize_prod_cement(self, mfa: fd.MFASystem, regional: bool = False):
+    def visualize_prod_cement(self, mfa: fd.MFASystem, regional: bool = False, stacked: Optional[str] = None, name_add="", width=1000, height=500):
         production = mfa.flows["prod_cement => prod_product"]
-        self.visualize_production(mfa=mfa, production=production, name="Cement", regional=regional, stacked=True)
+        self.visualize_production(mfa=mfa, production=production, name=name_add + "Cement", regional=regional, stacked=stacked, width=width, height=height)
 
     def visualize_prod_product(self, mfa: fd.MFASystem):
         production = mfa.flows["prod_product => use"].sum_over("s")
@@ -291,6 +338,15 @@ class CementDataExporter(CommonDataExporter):
             )
             fig = ap.plot()
 
+        # Adjust x-axis
+        if self.cfg.use_stock["over_gdp"]:
+            if self.cfg.plotting_engine == "plotly":
+                fig.update_xaxes(type="log", range=[3, 5])
+            elif self.cfg.plotting_engine == "pyplot":
+                for ax in fig.get_axes():
+                    ax.set_xscale("log")
+                    ax.set_xlim(1e3, 1e5)
+
         extrapolation_name = "_extrapolation" if show_extrapolation else ""
         future_name = "_projection" if show_future else "_historic"
         self.plot_and_save_figure(
@@ -347,7 +403,8 @@ class CementDataExporter(CommonDataExporter):
 
         return stock
     
-    def visualize_sd(self, model: "CementModel", material: str = "concrete", regional: bool = True, per_capita: bool = True):
+    def visualize_sd(self, model: "CementModel", material: str = "concrete", regional: bool = True, per_capita: bool = True,
+                     width: int = 500, height: int = 500, name="SD visualization"):
 
         mfa = model.future_mfa
         cement_ratio = mfa.parameters["product_cement_content"] / mfa.parameters["product_density"]
@@ -404,7 +461,8 @@ class CementDataExporter(CommonDataExporter):
         other_dimletters_sd = tuple(letter for letter in stock_sd.dims.letters if letter not in dimlist)
         stock_sd = stock_sd.sum_over(other_dimletters_sd)
         stock_sd = stock_sd[{"s": reduced_stock_type_dim}][{"t": reduced_time_dim}]
-
+        colormap = plc.qualitative.Plotly
+        colormap = [colormap[0], colormap[1], colormap[0], colormap[1]]
         ap_final_stock = self.plotter_class(
             array=stock,
             intra_line_dim="Reduced Time",
@@ -414,6 +472,7 @@ class CementDataExporter(CommonDataExporter):
             x_label=x_label,
             y_label=y_label,
             title=title,
+            color_map=colormap,
         )
         fig = ap_final_stock.plot()
 
@@ -427,27 +486,34 @@ class CementDataExporter(CommonDataExporter):
             title=title,
             fig=fig,
             line_type="dot",
+            color_map=colormap,
         )
         fig = ap_pure_prediction.plot()
 
         self.plot_and_save_figure(
             ap_pure_prediction,
-            f"SD_stocks_extrapolation.png",
+            filename=name + ".png",
             do_plot=False,
+            width=width,
+            height=height
         )
 
-    def visualize_top_vs_bottom(self, model: "CementModel", material="concrete", only_sector: bool = False):
+    def visualize_top_vs_bottom(self, model: "CementModel", material="concrete", only_sector: str = None,
+                                width: int = 500, height: int = 500):
         mfa = model.future_mfa
 
-        stock_sd = self.calculate_sd_stock(model, material=material).sum_over(("s", "b", "f", "m", "a"))
+        stock_sd = self.calculate_sd_stock(model, material=material)
         # remove mortar from stock before summing (for fair comparison)
         stock = mfa.stocks["in_use"].stock
         stock[{"m": "mortar"}][...] = 0
-        if only_sector:
-            # remove Civ, Ind from stock before summing (for fair comparison)
-            stock[{"s": "Civ"}][...] = 0
-            stock[{"s": "Ind"}][...] = 0
-        stock = stock.sum_over(("s", "m", "a"))
+        if only_sector is not None:
+            stock = stock[{"s": only_sector}]
+            stock_sd = stock_sd[{"s": only_sector}]
+            stock = stock.sum_over(("m", "a"))
+            stock_sd = stock_sd.sum_over(("b", "f", "m", "a"))
+        else:
+            stock = stock.sum_over(("s", "m", "a"))
+            stock_sd = stock_sd.sum_over(("s", "b", "f", "m", "a"))
         gdppc = mfa.parameters["gdppc"]
 
         cut_time = fd.Dimension(name="CutTime", letter="p", items=np.arange(1999, 2024))
@@ -471,7 +537,8 @@ class CementDataExporter(CommonDataExporter):
         # fig = ap_ratio.plot()
         # fig.update_xaxes(type="log", range=[3, 5])
 
-        self.plot_and_save_figure(ap_ratio, "ratio.png")
+        name = "ratio.png" if only_sector is None else f"{only_sector}_ratio.png"
+        self.plot_and_save_figure(ap_ratio, name, width=width, height=height)
 
         # ratio over time
         ap_ratio = self.plotter_class(
@@ -482,8 +549,8 @@ class CementDataExporter(CommonDataExporter):
             ylabel="Ratio",
             title=f"Ratio of Bottom-Up (SD) Stock to Top-down (DSM) Stock Estimate (1990-2023)",    
         )
-
-        self.plot_and_save_figure(ap_ratio, "ratio_time.png")
+        name = "ratio_time.png" if only_sector is None else f"{only_sector}_ratio_time.png"
+        self.plot_and_save_figure(ap_ratio, name)
 
         # top vs bottom
         ap_tb = self.plotter_class(
@@ -500,7 +567,8 @@ class CementDataExporter(CommonDataExporter):
         fig.update_xaxes(type="log")
         fig.update_yaxes(type="log")
 
-        self.plot_and_save_figure(ap_tb, "tb.png")
+        name = "tb.png" if only_sector is None else f"{only_sector}_tb.png"
+        self.plot_and_save_figure(ap_tb, name)
 
         cut_time = fd.Dimension(name="CutTime", letter="p", items=np.arange(2024, 2101))
         cut_stock_sd = stock_sd[{"t": cut_time}]
@@ -520,5 +588,6 @@ class CementDataExporter(CommonDataExporter):
             title=f"Ratio of Bottom-Up (SD) Stock to Top-down (DSM) Stock Estimate (2024-2100)",
         )
 
-        self.plot_and_save_figure(ap_ratio, "future_ratio.png")
+        name = "future_ratio.png" if only_sector is None else f"{only_sector}_future_ratio.png"
+        self.plot_and_save_figure(ap_ratio, name)
 

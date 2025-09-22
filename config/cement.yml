@@ -15,7 +15,7 @@ visualization:
   consumption:
     do_visualize: True
   use_stock:
-    do_visualize: False
+    do_visualize: True
     over_gdp: True
     per_capita: True
   eol_stock:
@@ -46,10 +46,10 @@ visualization:
   sd:
     do_visualize: True
     over_gdp: False
-  do_show_figs: True
-  do_save_figs: False
+  do_show_figs: False
+  do_save_figs: True
   plotting_engine: 'plotly'
-  plot_step: 5 # in years
+  plot_step: 1 # in years
 
 # data export
 output_path: 'data/cement/output'

@@ -69,13 +69,14 @@ class CommonDataExporter(RemindMFABaseModel):
     def figure_path(self, filename: str) -> str:
         return os.path.join(self.output_path, "figures", filename)
 
-    def plot_and_save_figure(self, plotter: fde.ArrayPlotter, filename: str, do_plot: bool = True):
+    def plot_and_save_figure(self, plotter: fde.ArrayPlotter, filename: str, do_plot: bool = True,
+                             width: int = 2200, height: int = 1300, scale: int = 3):
         if do_plot:
             plotter.plot()
         if self.cfg.do_show_figs:
             plotter.show()
         if self.cfg.do_save_figs:
-            plotter.save(self.figure_path(filename), width=2200, height=1300, scale=3)
+            plotter.save(self.figure_path(filename), width=width, height=height, scale=3)
 
     def stop_and_show(self):
         if self.cfg.plotting_engine == "pyplot" and self.cfg.do_show_figs:
