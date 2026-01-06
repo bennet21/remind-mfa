@@ -5,9 +5,6 @@ import flodym as fd
 from remind_mfa.cement.cement_config import CementCfg
 from remind_mfa.common.data_transformations import Bound, BoundList
 from remind_mfa.cement.cement_definition import get_cement_definition
-from remind_mfa.cement.cement_mfa_system_historic import (
-    InflowDrivenHistoricCementMFASystem,
-)
 from remind_mfa.cement.cement_mfa_system_historic import InflowDrivenHistoricCementMFASystem
 from remind_mfa.cement.cement_mfa_system_future import StockDrivenCementMFASystem
 from remind_mfa.cement.cement_mappings import CementDimensionFiles, CementDisplayNames
@@ -17,6 +14,7 @@ from remind_mfa.common.stock_extrapolation import StockExtrapolation
 from remind_mfa.common.assumptions_doc import add_assumption_doc
 from remind_mfa.common.common_model import CommonModel
 from remind_mfa.cement.cement_definition import scenario_parameters as cement_scn_prm_def
+from remind_mfa.common.common_data_reader import CommonDataReader
 
 
 class CementModel(CommonModel):
@@ -30,6 +28,19 @@ class CementModel(CommonModel):
     FutureMFASystemCls = StockDrivenCementMFASystem
     get_definition = staticmethod(get_cement_definition)
     custom_scn_prm_def = cement_scn_prm_def
+
+    def read_data(self):
+        # TODO find better way to allow missing values for material models
+        self.data_reader = CommonDataReader(
+            cfg=self.cfg,
+            definition=self.definition_future,
+            dimension_file_mapping=self.DimensionFilesCls(),
+            allow_missing_values=True,
+        )
+        self.dims = self.data_reader.read_dimensions(self.definition_future.dimensions)
+        self.parameters = self.data_reader.read_parameters(
+            self.definition_future.parameters, dims=self.dims
+        )
 
     def get_long_term_stock(self) -> fd.FlodymArray:
         """Extrapolate in use stock to future."""
@@ -56,9 +67,8 @@ class CementModel(CommonModel):
         )
 
         # 2) constrain growth rate
-        max_growth_rate = (
-            25  # t/cap per tenfold GDP increase, inferred from China #self.get_max_growth_rate()
-        )
+        # t/cap per tenfold GDP increase, inferred from China #self.get_max_growth_rate()
+        max_growth_rate = 25
         max_stretch_factor = 4 * max_growth_rate / region_sat
         min_stretch_factor = fd.FlodymArray(
             dims=max_stretch_factor.dims, values=np.zeros_like(max_stretch_factor.values)

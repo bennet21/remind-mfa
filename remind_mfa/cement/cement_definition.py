@@ -19,6 +19,9 @@ def get_cement_definition(cfg: CementCfg, historic: bool) -> RemindMFADefinition
         fd.DimensionDefinition(name="Waste Type", dim_letter="w", dtype=str),
         fd.DimensionDefinition(name="Waste Size", dim_letter="p", dtype=str),
         fd.DimensionDefinition(name="Carbonation Location", dim_letter="c", dtype=str),
+        # SD
+        fd.DimensionDefinition(name="Structure", dim_letter="b", dtype=str), # b for building
+        fd.DimensionDefinition(name="Function", dim_letter="f", dtype=str),
     ]
 
     # 2) Processes
@@ -67,7 +70,7 @@ def get_cement_definition(cfg: CementCfg, historic: bool) -> RemindMFADefinition
     # fmt: on
     # TODO remove historic_in_use stock, just use in_use, later change from h to t dimension
     # 4) Stocks
-    if historic:
+    if historic or bottom_up:
         stocks = [
             fd.StockDefinition(
                 name="historic_cement_in_use",
@@ -179,6 +182,13 @@ def get_cement_definition(cfg: CementCfg, historic: bool) -> RemindMFADefinition
                                      description="Minimum particle size represented for each waste type and class."),
         RemindMFAParameterDefinition(name="waste_size_max", dim_letters=("w", "p"),
                                      description="Maximum particle size represented for each waste type and class."),
+         # SD parameters
+        RemindMFAParameterDefinition(name="concrete_building_mi", dim_letters=("r", "f", "b"),
+                                     description="Material intensity of concrete (t/m2) differentiated by building function and structure."),
+        RemindMFAParameterDefinition(name="building_split", dim_letters=("r", "s", "b", "f"),
+                                     description="Share of buildings by structure and function in each region."),
+        RemindMFAParameterDefinition(name="floorspace", dim_letters=("t", "r", "s"),
+                                     description="Historic and projected total buildings floorspace per region and stock type."),
     ]
 
     # fmt: on
