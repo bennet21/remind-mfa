@@ -10,7 +10,12 @@ class ParameterReconciliation:
     def __init__(self, prms, dims):
         self._time = 2020
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
- 
+        # save computation time
+        self._no_correction_dim_letters = ('t', 'h') # instead of df/dx, now calculating df/dd 
+        # TODO allow option to bring in knowledge that parameters and stock dimensions often do not interact
+        # TODO set and skip over known sensitivity parameters
+
+
         self.prepare_dims(dims)
         self.prepare_prms(prms)
 
@@ -133,7 +138,7 @@ class ParameterReconciliation:
         stk = stk.sum_over("a")
         return stk
     
-    def system_model(self, prm: list[fd.FlodymArray]):
+    def system_model(self, prm: List[fd.FlodymArray]):
         return self.calc_top_down_stock(prm) / self.calc_bottom_up_stock(prm)
 
     def pre_compute_sensitivity(self, f: Callable):
@@ -149,14 +154,11 @@ class ParameterReconciliation:
     def calc_sensitivity(self, f: Callable, f0: fd.FlodymArray, prm_name: str):
         J = self.calc_jacobian(f, f0, prm_name)
         
-        prm_flat = self.flatten_fd_to_np(self.prms[prm_name])
+        # scaling by f0 for logarithmic sensitivity
         f0_flat = self.flatten_fd_to_np(f0)
-
-        prm_row = prm_flat[np.newaxis, :]
         f0_col = f0_flat[:, np.newaxis]
-        scaling = prm_row / f0_col
 
-        S = J * scaling
+        S = J / f0_col
 
         return S
     
@@ -165,31 +167,45 @@ class ParameterReconciliation:
         Use finite differences to calculate the gradient of a function with respect to one parameter.
         Expects that f0 is flat and f returns a flat array.
         """
-        prm = self.prms[prm_name].values
+        prm = self.prms[prm_name]
+        drop_letters = tuple(dl for dl in self._no_correction_dim_letters if dl in prm.dims.letters)
+        correction_dims = prm.dims
+        for drop_letter in drop_letters:
+            correction_dims = correction_dims.drop(drop_letter)
+        
 
-        ouptut_dim = f0.size
-        param_dim = prm.size
+        output_dim = f0.size
+        param_dim = correction_dims.total_size
+        J = np.zeros((output_dim, param_dim))
 
-        J = np.zeros((ouptut_dim, param_dim))
-
-        for i in range(param_dim):
-            idx = np.unravel_index(i, prm.shape)
-            val = prm[idx]
-
-            # Calculate step size h
-            h = val * epsilon if val != 0 else epsilon
+        for flat_idx, red_idx in enumerate(np.ndindex(*correction_dims.shape)):
+            full_idx = self._build_full_index(prm.dims, correction_dims, red_idx, drop_letters)
+            val = prm.values[full_idx].copy()
 
             # Perform perturbation
-            prm[idx] = val + h
+            prm.values[full_idx] = val * (1 + epsilon)
             f_perturbed = f(self.prms)
 
             # Calculate gradient
-            J[:, i] = self.flatten_fd_to_np(f_perturbed - f0) / h
+            J[:, flat_idx] = self.flatten_fd_to_np(f_perturbed - f0) / epsilon
 
             # Restore original value
-            prm[idx] = val
+            prm.values[full_idx] = val
 
         return J
+    
+    @staticmethod
+    def _build_full_index(prm_dims, correction_dims, red_idx, drop_letters):
+        full_letters = prm_dims.letters
+        red_letters = correction_dims.letters
+        red_axes = dict(zip(red_letters, red_idx))
+        full_idx = []
+        for dl in full_letters:
+            if dl in drop_letters:
+                full_idx.append(slice(None))
+            else:
+                full_idx.append(red_axes[dl])
+        return tuple(full_idx)
 
     def correct_parameters(self):
         correction_factors = self.calc_correction()
