@@ -1,13 +1,16 @@
 import numpy as np
-from typing import List, Callable, Dict
+from typing import List, Callable, Dict, Tuple
 import flodym as fd
+import logging
 
 from remind_mfa.common.common_definition import RemindMFAParameterDefinition
 
 class ParameterReconciliation:
     """Parameter reconciliation of top-down and bottom-up models."""
 
-    def __init__(self, prms, dims):
+    def __init__(self, cfg, prms, dims):
+        self.cfg = cfg
+
         self._time = 2020
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
         # save computation time
@@ -19,16 +22,32 @@ class ParameterReconciliation:
         self.prepare_dims(dims)
         self.prepare_prms(prms)
 
-        self.pre_compute_sensitivity(self.calc_bottom_up_stock)
-
         self.bu = self.calc_bottom_up_stock(self.prms)
         self.td = self.calc_top_down_stock(self.prms)
 
+        self.pre_compute_sensitivity(self.calc_bottom_up_stock, self.bu, denominator=True)
+        self.pre_compute_sensitivity(self.calc_top_down_stock, self.td)
+
+        self.pre_compute_lambda()
+        self.calc_corrections()
+
+
+
         self.f0 = self.system_model(self.prms)
 
-        b = np.log(self.flatten_fd_to_np(self.td)) - np.log(self.flatten_fd_to_np(self.bu)) # this should have shape 24
-        pass
+    def letters_to_drop(self, dims: fd.DimensionSet) -> Tuple:
+        drop_letters = tuple(dl for dl in self._no_correction_dim_letters if dl in dims.letters)
+        return drop_letters
 
+    def extract_wanted_dims(self, dims: fd.DimensionSet, drop_letters: Tuple = None) -> fd.DimensionSet:
+        """Extract relevant dimensions."""
+        if not drop_letters:
+            drop_letters = self.letters_to_drop(dims)
+        new_dims = dims
+        for drop_letter in drop_letters:
+            new_dims = new_dims.drop(drop_letter)
+        return new_dims
+        
     def prepare_dims(self, dims: fd.DimensionSet):
         self.dims = dims.replace('s', self._reduced_stock_type)
 
@@ -58,7 +77,9 @@ class ParameterReconciliation:
         Returns a FlodymArray with the same dimensions as the parameter.
         """
 
-        sigma = {
+        default_rel_std = 0.2
+
+        rel_std = {
             "concrete_building_mi": fd.FlodymArray(
                 dims = fd.DimensionSet(dim_list=[self.dims["r"]]),
                 values = np.array([0.2 if self.prms["industrialized_regions"][region].values else 0.4 for region in self.dims["r"].items])
@@ -67,14 +88,29 @@ class ParameterReconciliation:
             "floorspace": 0.2
         }
 
-        out = sigma[prm_name]
+        out = rel_std.get(prm_name)
+        if out is None:
+            logging.warning(
+                "Relative standard deviation missing for %s; using default %f",
+                prm_name,
+                default_rel_std,
+            )
+            out = default_rel_std
+        
         if isinstance(out, (float, int)):
-            out = fd.FlodymArray(dims=fd.DimensionSet(dim_list=[]), values=out)
+            out = fd.FlodymArray(dims=fd.DimensionSet(dim_list=[]), values=np.array(out))
         if not isinstance(out, fd.FlodymArray):
             raise ValueError(f"Relative standard deviation for parameter {prm_name} not defined.")
-
-        out = out.cast_to(self.prms[prm_name].dims)
+        
+        output_dims = self.extract_wanted_dims(self.prms[prm_name].dims)
+        out = out.cast_to(output_dims)
         return out
+    
+    def get_sigma(self, prm_name: str) -> np.ndarray:
+        """Get the standard deviation of a parameter."""
+        rel_std = self.rel_std(prm_name)
+        sigma = self.flatten_fd_to_np(rel_std) ** 2
+        return sigma
     
     @staticmethod
     def get_relevant_parameters(model_func: Callable, prm: List[RemindMFAParameterDefinition]) -> set:
@@ -141,17 +177,22 @@ class ParameterReconciliation:
     def system_model(self, prm: List[fd.FlodymArray]):
         return self.calc_top_down_stock(prm) / self.calc_bottom_up_stock(prm)
 
-    def pre_compute_sensitivity(self, f: Callable):
+    def pre_compute_sensitivity(self, f: Callable, f0, denominator: bool = False):
         """Pre-compute sensitivity matrices for parameters used in the given model function."""
-        f0 = f(self.prms)
-
         relevant_params = self.get_relevant_parameters(f, self.prms)
-        self.S_matrices = {}
+        if not hasattr(self, "S_matrices") or not self.S_matrices:
+            self.S_matrices = {}
+    
         for prm_name in relevant_params:
-            S_mat = self.calc_sensitivity(f, f0, prm_name)
+            logging.info(f"Calculating sensitivity for parameter: {prm_name}")
+            if prm_name in self.S_matrices:
+                # TODO I can just sum the S matrices: self.S_matrices[prm_name] += S_mat
+                raise ValueError(f"Sensitivity for parameter {prm_name} already computed.",
+                                 "Parameters present in both bottom-up and top-down models currently not supported.")
+            S_mat = self.calc_sensitivity(f, f0, prm_name, denominator=denominator)
             self.S_matrices[prm_name] = S_mat
 
-    def calc_sensitivity(self, f: Callable, f0: fd.FlodymArray, prm_name: str):
+    def calc_sensitivity(self, f: Callable, f0: fd.FlodymArray, prm_name: str, denominator: bool = False):
         J = self.calc_jacobian(f, f0, prm_name)
         
         # scaling by f0 for logarithmic sensitivity
@@ -159,7 +200,10 @@ class ParameterReconciliation:
         f0_col = f0_flat[:, np.newaxis]
 
         S = J / f0_col
-
+        
+        if denominator:
+            return -S
+        
         return S
     
     def calc_jacobian(self, f: Callable, f0: np.ndarray, prm_name: str, epsilon=1e-5):
@@ -168,12 +212,9 @@ class ParameterReconciliation:
         Expects that f0 is flat and f returns a flat array.
         """
         prm = self.prms[prm_name]
-        drop_letters = tuple(dl for dl in self._no_correction_dim_letters if dl in prm.dims.letters)
-        correction_dims = prm.dims
-        for drop_letter in drop_letters:
-            correction_dims = correction_dims.drop(drop_letter)
+        drop_letters = self.letters_to_drop(prm.dims)
+        correction_dims = self.extract_wanted_dims(prm.dims, drop_letters)
         
-
         output_dim = f0.size
         param_dim = correction_dims.total_size
         J = np.zeros((output_dim, param_dim))
@@ -207,23 +248,36 @@ class ParameterReconciliation:
                 full_idx.append(red_axes[dl])
         return tuple(full_idx)
 
+    def pre_compute_lambda(self):
+        """Solve Aλ = b for λ."""
+
+        b = np.log(self.flatten_fd_to_np(self.td)) - np.log(self.flatten_fd_to_np(self.bu))
+        D = b.size
+        A = np.zeros((D, D))
+        for prm_name, S in self.S_matrices.items():
+            var_vec = self.get_sigma(prm_name)
+            S_weighted = S * var_vec[np.newaxis, :]
+            A += S_weighted @S.T
+
+        # solve for lambda
+        self.lmda = np.linalg.solve(A, b)
+    
+    def calc_corrections(self):
+        self.correction_factors = {}
+        for prm_name in self.S_matrices.keys():
+            log_correction = self.calc_log_correction(prm_name)
+            self.correction_factors[prm_name] = np.exp(log_correction)
+
+    def calc_log_correction(self, prm_name: str):
+        var_vec = self.get_sigma(prm_name)
+        S = self.S_matrices[prm_name]
+        grad = S.T @ self.lmda
+        d =  var_vec * grad
+        return d
+
     def correct_parameters(self):
         correction_factors = self.calc_correction()
         parameters = parameters * correction_factors
-    
-    def calc_correction(self):
-        return np.exp(self.calc_log_correction())
-
-    def calc_log_correction(self):
-        d = self.O * self.B.T * self.lmda * self.S
-        return d
-
-    def calc_lambda(self):
-        """Solve Aλ = b for λ."""
-        A = np.zeros((self.n_dims, self.n_dims))
-
-        for i in range(self.n_params):
-            A += self.S[i] @ self.B[i] @ self.O[i] @ self.B[i].T @ self.S[i]
 
 
 class DependencyTracker(dict):
