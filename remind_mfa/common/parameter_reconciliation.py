@@ -31,6 +31,9 @@ class ParameterReconciliation:
         self.pre_compute_lambda()
         self.calc_corrections()
 
+        print(self.system_model(self.prms))
+        self.correct_parameters()
+        print(self.system_model(self.prms))
 
 
         self.f0 = self.system_model(self.prms)
@@ -70,6 +73,21 @@ class ParameterReconciliation:
             raise ValueError("Size of flat array does not match size of template.")
         reshaped_values = flat_arr.reshape(template.values.shape)
         return fd.FlodymArray(dims=template.dims, values=reshaped_values)
+
+    def _get_parameter_space(self, prm_name: str) -> Tuple[fd.FlodymArray, Tuple[str, ...], fd.DimensionSet]:
+        prm = self.prms[prm_name]
+        drop_letters = self.letters_to_drop(prm.dims)
+        correction_dims = self.extract_wanted_dims(prm.dims, drop_letters)
+        return prm, drop_letters, correction_dims
+
+    def _build_template(self, dims: fd.DimensionSet) -> fd.FlodymArray:
+        values = np.zeros(dims.total_size, dtype=float).reshape(dims.shape)
+        return fd.FlodymArray(dims=dims, values=values)
+
+    def _reshape_vector_to_parameter(self, prm_name: str, flat_arr: np.ndarray) -> fd.FlodymArray:
+        _, _, correction_dims = self._get_parameter_space(prm_name)
+        template = self._build_template(correction_dims)
+        return self.reshape_np_to_fd(flat_arr, template)
     
     def rel_std(self, prm_name: str) -> fd.FlodymArray:
         """
@@ -211,9 +229,7 @@ class ParameterReconciliation:
         Use finite differences to calculate the gradient of a function with respect to one parameter.
         Expects that f0 is flat and f returns a flat array.
         """
-        prm = self.prms[prm_name]
-        drop_letters = self.letters_to_drop(prm.dims)
-        correction_dims = self.extract_wanted_dims(prm.dims, drop_letters)
+        prm, drop_letters, correction_dims = self._get_parameter_space(prm_name)
         
         output_dim = f0.size
         param_dim = correction_dims.total_size
@@ -260,24 +276,24 @@ class ParameterReconciliation:
             A += S_weighted @S.T
 
         # solve for lambda
-        self.lmda = np.linalg.solve(A, b)
+        self.lmda = np.linalg.solve(A, -b)
     
     def calc_corrections(self):
         self.correction_factors = {}
         for prm_name in self.S_matrices.keys():
             log_correction = self.calc_log_correction(prm_name)
-            self.correction_factors[prm_name] = np.exp(log_correction)
+            self.correction_factors[prm_name] = log_correction.apply(np.exp)
 
-    def calc_log_correction(self, prm_name: str):
+    def calc_log_correction(self, prm_name: str) -> fd.FlodymArray:
         var_vec = self.get_sigma(prm_name)
         S = self.S_matrices[prm_name]
         grad = S.T @ self.lmda
-        d =  var_vec * grad
-        return d
+        d = var_vec * grad
+        return self._reshape_vector_to_parameter(prm_name, d)
 
     def correct_parameters(self):
-        correction_factors = self.calc_correction()
-        parameters = parameters * correction_factors
+        for prm_name, c in self.correction_factors.items():
+            self.prms[prm_name] = self.prms[prm_name] * c
 
 
 class DependencyTracker(dict):
