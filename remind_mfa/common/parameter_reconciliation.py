@@ -16,7 +16,9 @@ class ParameterReconciliation:
         # save computation time
         self._no_correction_dim_letters = ('t', 'h') # instead of df/dx, now calculating df/dd 
         # TODO allow option to bring in knowledge that parameters and stock dimensions often do not interact
+        output_dims_are_independent = True
         # TODO set and skip over known sensitivity parameters
+        # TODO don't forget to normalize!
 
         self.prepare_dims(dims)
         self.prepare_prms(prms)
@@ -32,19 +34,14 @@ class ParameterReconciliation:
             if "s" in val.dims.letters:
                 val = val[{"s": self._reduced_stock_type}]
             self.prms[key] = val
-            self.prms_adj_dims[key] = self.extract_wanted_dims(val.dims)
-
-    def letters_to_drop(self, dims: fd.DimensionSet) -> Tuple:
-        drop_letters = tuple(dl for dl in self._no_correction_dim_letters if dl in dims.letters)
-        return drop_letters
-
-    def extract_wanted_dims(self, dims: fd.DimensionSet, drop_letters: Optional[Tuple] = None) -> fd.DimensionSet:
-        """Extract relevant dimensions."""
-        if not drop_letters:
-            drop_letters = self.letters_to_drop(dims)
+            self.prms_adj_dims[key] = self.remove_fd_dims_if_present(val.dims, self._no_correction_dim_letters)
+    
+    @staticmethod
+    def remove_fd_dims_if_present(dims: fd.DimensionSet, letters_to_remove: Tuple) -> fd.DimensionSet:
         new_dims = dims
-        for drop_letter in drop_letters:
-            new_dims = new_dims.drop(drop_letter)
+        for letter in letters_to_remove:
+            if letter in new_dims.letters:
+                new_dims = new_dims.drop(letter)
         return new_dims
 
     def correct_parameters(self):
@@ -170,16 +167,14 @@ class ParameterReconciliation:
         prm = self.prms[prm_name]
         original_prm = self.original_prms[prm_name]
         dims_to_adj = self.prms_adj_dims[prm_name]
-        
-        output_dim = f0.size
-        param_dim = dims_to_adj.total_size        
-        J = np.zeros((output_dim, param_dim))
+             
+        J = np.zeros((f0.size, dims_to_adj.total_size ))
 
         # TODO move looping into separate helper function
         # enumerate indeed works the same as np.flatten
         import itertools
-        all_dim_items = [d.items for d in dims_to_adj]
-        for flat_idx, dim_element in enumerate(itertools.product(*all_dim_items)):
+        adj_items = [d.items for d in dims_to_adj]
+        for flat_idx, dim_element in enumerate(itertools.product(*adj_items)):
             slicer = dict(zip(dims_to_adj.letters, dim_element))
             val = original_prm[slicer]
 
