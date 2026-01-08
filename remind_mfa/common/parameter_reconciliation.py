@@ -205,7 +205,7 @@ class ParameterReconciliation:
             A += S_weighted @S.T
 
         # solve for lambda
-        self.lmda = np.linalg.solve(A, -b)
+        self.lmda = np.linalg.solve(A, b)
 
     def get_sigma(self, prm_name: str) -> np.ndarray:
         rel_std = self.rel_std(prm_name)
@@ -256,7 +256,7 @@ class ParameterReconciliation:
         grad = S.T @ self.lmda
         # TODO prepare sigma vector beforehand
         var_vec = self.get_sigma(prm_name)
-        d = var_vec * grad
+        d = - var_vec * grad
         return self.reshape_np_to_fd(d, self.prms_adj_dims[prm_name])
 
     def reshape_np_to_fd(self, flat_arr: np.ndarray, target_dims: fd.DimensionSet) -> fd.FlodymArray:
