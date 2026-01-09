@@ -2,6 +2,7 @@ import numpy as np
 from typing import Callable, Tuple, Optional
 import flodym as fd
 import logging
+import itertools
 
 from copy import deepcopy
 class ParameterReconciliation:
@@ -9,16 +10,18 @@ class ParameterReconciliation:
     # TODO inherit from separate helper class
     # TODO pydantic?
 
-    def __init__(self, prms: dict[str, fd.Parameter], dims: fd.DimensionSet):
+    def __init__(self, prms: dict[str, fd.Parameter], dims: fd.DimensionSet, uncoupled: bool = False):
 
         self._year_of_reconciliation = 2020
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
         # save computation time
         self._no_correction_dim_letters = ('t', 'h') # instead of df/dx, now calculating df/dd 
         # TODO allow option to bring in knowledge that parameters and stock dimensions often do not interact
-        output_dims_are_independent = True
+        # NB this does not mean that all parameter dimensions are independent, only that output dimensions, if existant in parameters
+        self.output_dims_are_independent = uncoupled
         # TODO set and skip over known sensitivity parameters
         # TODO don't forget to normalize!
+        # TODO check if I can use [...] more for flodym arrays to avoid dimension issues
 
         self.prepare_dims(dims)
         self.prepare_prms(prms)
@@ -150,36 +153,66 @@ class ParameterReconciliation:
     def calc_sensitivity(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, denominator: bool = False):
         J = self.calc_jacobian(f, f0, prm_name)
         
-        # scaling by f0 for logarithmic sensitivity
-        f0_flat = self.flatten_fd_to_np(f0)
-        f0_col = f0_flat[:, np.newaxis]
-
-        S = J / f0_col
+        if self.output_dims_are_independent:
+            # Convert FlodymArray Jacobian to numpy matrix and scale for logarithmic sensitivity
+            S = self.flodym_jacobian_to_matrix(J / f0, f0.dims, self.prms_adj_dims[prm_name])
+        else:
+            f0_flat = self.flatten_fd_to_np(f0)[:, np.newaxis]
+            S = J / f0_flat
         
         if denominator:
             return -S
-        
         return S
     
     def calc_jacobian(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, epsilon=1e-5):
+        # TODO I could do everything with flodym by just introducing new parameter dimensions for output dimensions
+        # matrix multiplication would then be (A*B).sum_over(dims), instead of A @ B
+        if self.output_dims_are_independent:
+            return self._calc_jacobian_independent(f, f0, prm_name)
+        return self._calc_jacobian_full(f, f0, prm_name)
+    
+    def _calc_jacobian_independent(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, epsilon=1e-5):
+        # TODO why is prm not recognized as FlodymArray?
+        prm = self.prms[prm_name]
+        original_prm = self.original_prms[prm_name]
 
+        # dims in parameter but NOT in output — must loop over these
+        reduced_dims = self.remove_fd_dims_if_present(self.prms_adj_dims[prm_name], f0.dims.letters)
+        combined_dims = self.prms_adj_dims[prm_name].union_with(f0.dims)
+
+        if reduced_dims.total_size == 0:
+            # No extra dims — single perturbation suffices
+            prm[...] = original_prm * (1 + epsilon)
+            f_perturbed = f(self.prms)
+            prm[...] = original_prm
+            J = (f_perturbed - f0) / epsilon
+            return J
+        
+        J = fd.FlodymArray(dims=combined_dims, values=np.zeros(combined_dims.shape))
+
+        for slicer in self.iter_dim_slicers(reduced_dims):
+            val = original_prm[slicer]
+
+            prm[slicer] = val * (1 + epsilon)
+            f_perturbed = f(self.prms)
+            J[slicer] = (f_perturbed - f0) / epsilon
+
+            prm[slicer] = val
+        
+        return J
+
+    def _calc_jacobian_full(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, epsilon=1e-5):
         # TODO why is dims_to_adj not recognized as dimensionset?
         prm = self.prms[prm_name]
         original_prm = self.original_prms[prm_name]
         dims_to_adj = self.prms_adj_dims[prm_name]
              
-        J = np.zeros((f0.size, dims_to_adj.total_size ))
+        J = np.zeros((f0.size, dims_to_adj.total_size))
 
-        # TODO move looping into separate helper function
-        # enumerate indeed works the same as np.flatten
-        import itertools
-        adj_items = [d.items for d in dims_to_adj]
-        for flat_idx, dim_element in enumerate(itertools.product(*adj_items)):
-            slicer = dict(zip(dims_to_adj.letters, dim_element))
+        for flat_idx, slicer in enumerate(self.iter_dim_slicers(dims_to_adj)):
             val = original_prm[slicer]
 
-            # Perform perturbation
-            # zero values are not corrected
+            # Perform perturbation (zero values are not corrected)
             prm[slicer] = val * (1 + epsilon)
             f_perturbed = f(self.prms)
             J[:, flat_idx] = self.flatten_fd_to_np(f_perturbed - f0) / epsilon
@@ -188,21 +221,80 @@ class ParameterReconciliation:
             prm[slicer] = val
 
         return J
+
+    @staticmethod
+    def iter_dim_slicers(dims: fd.DimensionSet):
+        """
+        Iterate over all element combinations of a DimensionSet, yielding dict slicers.
+        
+        Yields dicts like {'r': 'USA', 'u': 'Res'} for each element in the Cartesian product.
+        Order matches numpy flatten (C-order): last dimension varies fastest.
+        """
+        items_per_dim = [d.items for d in dims]
+        for dim_element in itertools.product(*items_per_dim):
+            yield dict(zip(dims.letters, dim_element))
     
     def flatten_fd_to_np(self, arr: fd.FlodymArray) -> np.ndarray:
         """Flatten a FlodymArray into a 1D numpy array."""
         return arr.values.flatten()
     
+    def flodym_jacobian_to_matrix(
+        self,
+        J: fd.FlodymArray,
+        output_dims: fd.DimensionSet,
+        param_dims: fd.DimensionSet,
+    ) -> np.ndarray:
+        """
+        Convert a FlodymArray Jacobian into a 2D numpy sensitivity matrix.
+        
+        The Jacobian J has dimensions that are the union of output_dims and param_dims.
+        Dimensions shared between output and parameter create block-diagonal structure:
+        each element of the shared dimension only affects its corresponding output.
+        
+        Args:
+            J: FlodymArray with dims = union(output_dims, param_dims)
+            output_dims: Dimensions of the model output (e.g., region, stock_type)
+            param_dims: Dimensions of the parameter being varied
+            
+        Returns:
+            2D numpy array of shape (output_size, param_size)
+        """
+        output_size = output_dims.total_size
+        param_size = param_dims.total_size
+        S = np.zeros((output_size, param_size))
+        
+        # Identify shared vs unique dimensions
+        shared_letters = set(output_dims.letters) & set(param_dims.letters)
+        
+        # Iterate over all output positions
+        for out_idx, out_slicer in enumerate(self.iter_dim_slicers(output_dims)):
+            # Iterate over all parameter positions
+            for prm_idx, prm_slicer in enumerate(self.iter_dim_slicers(param_dims)):
+                # Check if shared dimensions match
+                # If they don't match, the sensitivity is zero (block-diagonal structure)
+                shared_match = all(
+                    out_slicer[letter] == prm_slicer[letter]
+                    for letter in shared_letters
+                )
+                
+                if shared_match:
+                    # Build the combined slicer for J
+                    # J has all dimensions from both output and param
+                    j_slicer = {**out_slicer, **prm_slicer}
+                    S[out_idx, prm_idx] = J[j_slicer].values.item()
+        
+        return S
+    
     def pre_compute_lambda(self):
         """Solve Aλ = b for λ."""
-
         b = self.flatten_fd_to_np(self.td.apply(np.log) - self.bu.apply(np.log))
         D = b.size
         A = np.zeros((D, D))
+        
         for prm_name, S in self.S_matrices.items():
             var_vec = self.get_sigma(prm_name)
             S_weighted = S * var_vec[np.newaxis, :]
-            A += S_weighted @S.T
+            A += S_weighted @ S.T
 
         # solve for lambda
         self.lmda = np.linalg.solve(A, b)
@@ -223,7 +315,7 @@ class ParameterReconciliation:
         rel_std = {
             "concrete_building_mi": fd.FlodymArray(
                 dims = fd.DimensionSet(dim_list=[self.dims["r"]]),
-                values = np.array([0.2 if self.prms["industrialized_regions"][region].values else 0.4 for region in self.dims["r"].items])
+                values = np.array([0.2 if self.prms["industrialized_regions"][{"r": region}].values else 0.4 for region in self.dims["r"].items])
             ),
             "building_split": 0.2,
             "floorspace": 0.2
