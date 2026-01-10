@@ -7,7 +7,7 @@ import itertools
 from copy import deepcopy
 class ParameterReconciliation:
     """Parameter reconciliation of top-down and bottom-up models."""
-    # TODO inherit from separate helper class
+    # TODO inherit from separate helper class?
     # TODO pydantic?
 
     def __init__(self, prms: dict[str, fd.Parameter], dims: fd.DimensionSet, uncoupled: bool = False):
@@ -16,11 +16,11 @@ class ParameterReconciliation:
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
         # save computation time
         self._no_correction_dim_letters = ('t', 'h') # instead of df/dx, now calculating df/dd 
-        # TODO allow option to bring in knowledge that parameters and stock dimensions often do not interact
-        # NB this does not mean that all parameter dimensions are independent, only that output dimensions, if existant in parameters
+        
         self.output_dims_are_independent = uncoupled
+        # NB this does not mean that all parameter dimensions are independent, only that output dimensions, if existant in parameters
+
         # TODO set and skip over known sensitivity parameters
-        # TODO don't forget to normalize!
         # TODO check if I can use [...] more for flodym arrays to avoid dimension issues
 
         self.prepare_dims(dims)
@@ -31,8 +31,8 @@ class ParameterReconciliation:
         self.dims = dims.replace('s', self._reduced_stock_type)
     
     def prepare_prms(self, prms: dict[str, fd.Parameter]):
-        self.prms = {}
-        self.prms_adj_dims = {}
+        self.prms: dict[str, fd.Parameter] = {}
+        self.prms_adj_dims: dict[str, fd.DimensionSet] = {}
         for key, val in prms.items():
             if "s" in val.dims.letters:
                 val = val[{"s": self._reduced_stock_type}]
@@ -48,8 +48,6 @@ class ParameterReconciliation:
         return new_dims
 
     def correct_parameters(self):
-        self.original_prms = deepcopy(self.prms)
-
         self.td = self.calc_top_down_stock(self.prms)
         self.bu = self.calc_bottom_up_stock(self.prms)
 
@@ -61,11 +59,45 @@ class ParameterReconciliation:
         self.calc_corrections()
 
         # TODO see if I really want to do the mulitplication here, or rather in parameter extrapolation?
-        self.updated_prms = self.prms
         for prm_name, c in self.correction_factors.items():
-            self.updated_prms[prm_name] = self.prms[prm_name] * c
+            # TODO do I want to do the correction directy on self.prms, or rather return and or create self.corrected_prms?
+            self.prms[prm_name] = self.prms[prm_name] * c
+            self.normalize_parameter(prm_name)
+            # TODO the parameters need to get their original dimensions back?
 
         print("done")
+
+    def normalize_parameter(self, prm_name: str):
+        """
+        Normalize share or split parameters to sum up to 1 along their relevant dimensions.
+        """
+        # TODO find better way to know which parameters need normalization and along which dimensions
+        normalization_dims = {
+            "building_split": ("Structure", "Function",),
+            "product_application_split": ("Product Application",),
+            "product_material_split": ("Product Material",),
+            "stock_type_split": ("Reduced Stock Type",),
+        
+        }
+        if prm_name not in normalization_dims:
+            return
+        
+        prm = self.prms[prm_name]
+        if prm_name == "product_application_split":
+            # TODO redefine parameter such that no such special treatment is necessary
+            concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
+            mortar_application_dim = fd.Dimension(name="Mortar Product Application", letter="z", items=['finishing', 'masonry', 'maintenance'])
+            concrete_prm = prm[{'a': concrete_application_dim}]
+            mortar_prm = prm[{'a': mortar_application_dim}]
+            sum_concrete = concrete_prm.sum_over('y')
+            sum_mortar = mortar_prm.sum_over('z')
+            prm[{'a': concrete_application_dim}] = concrete_prm / sum_concrete
+            prm[{'a': mortar_application_dim}] = mortar_prm / sum_mortar
+        else: 
+            prm_sum = prm.sum_over(normalization_dims[prm_name])
+            prm = prm / prm_sum
+        return
+
 
     def calc_bottom_up_stock(self, prm: dict[str, fd.FlodymArray]):
         stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
@@ -73,13 +105,14 @@ class ParameterReconciliation:
         stk = stk[{"t": self._year_of_reconciliation}]
 
         # build up new stock where function (f) and stock type (s) are merged into reduced stock type (u)
-        new_stk = fd.FlodymArray(dims=stk.dims.drop("f"))
+        new_stk = fd.FlodymArray.zeros(dims=stk.dims.drop("f"))
         new_stk[{'u': 'Res'}] = stk[{'f': 'RS', 'u': "Res"}] + stk[{'f': 'RM', 'u': "Res"}]
         new_stk[{'u': 'Com'}] = stk[{'f': 'Com', 'u': "Com"}]
         new_stk = new_stk.sum_over('b')
         return new_stk
     
     def calc_top_down_stock(self, prm: dict[str, fd.FlodymArray]):
+        # TODO find a way to use historic cement mfa here
         cement_consumption = (
             (1 - prm["cement_losses"])
             * (prm["cement_production"] - prm["cement_trade"])
@@ -131,7 +164,7 @@ class ParameterReconciliation:
             logging.info(f"Calculating sensitivity for parameter: {prm_name}")
             S_mat = self.calc_sensitivity(f, f0, prm_name, denominator=denominator)
             if prm_name in self.S_matrices:
-                # TODO check if that makes sense
+                # TODO double check if that makes sense
                 logging.info(f"Sensitivity for parameter {prm_name} already exists; summing matrices.")
                 self.S_matrices[prm_name] = self.S_matrices[prm_name] + S_mat
             else:
@@ -172,9 +205,8 @@ class ParameterReconciliation:
         return self._calc_jacobian_full(f, f0, prm_name)
     
     def _calc_jacobian_independent(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, epsilon=1e-5):
-        # TODO why is prm not recognized as FlodymArray?
         prm = self.prms[prm_name]
-        original_prm = self.original_prms[prm_name]
+        original_prm = prm.copy()
 
         # dims in parameter but NOT in output — must loop over these
         reduced_dims = self.remove_fd_dims_if_present(self.prms_adj_dims[prm_name], f0.dims.letters)
@@ -182,13 +214,13 @@ class ParameterReconciliation:
 
         if reduced_dims.total_size == 0:
             # No extra dims — single perturbation suffices
-            prm[...] = original_prm * (1 + epsilon)
+            prm[...] = prm * (1 + epsilon)
             f_perturbed = f(self.prms)
             prm[...] = original_prm
             J = (f_perturbed - f0) / epsilon
             return J
         
-        J = fd.FlodymArray(dims=combined_dims, values=np.zeros(combined_dims.shape))
+        J = fd.FlodymArray.zeros(combined_dims)
 
         for slicer in self.iter_dim_slicers(reduced_dims):
             val = original_prm[slicer]
@@ -202,9 +234,8 @@ class ParameterReconciliation:
         return J
 
     def _calc_jacobian_full(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, epsilon=1e-5):
-        # TODO why is dims_to_adj not recognized as dimensionset?
         prm = self.prms[prm_name]
-        original_prm = self.original_prms[prm_name]
+        original_prm = prm.copy()
         dims_to_adj = self.prms_adj_dims[prm_name]
              
         J = np.zeros((f0.size, dims_to_adj.total_size))
@@ -310,11 +341,14 @@ class ParameterReconciliation:
         Returns a FlodymArray with the same dimensions as the parameter.
         """
 
+        # TODO some parameters are manually created, they need rel_std of zero.
+
         default_rel_std = 0.2
 
         rel_std = {
-            "concrete_building_mi": fd.FlodymArray(
-                dims = fd.DimensionSet(dim_list=[self.dims["r"]]),
+            "concrete_building_mi": fd.FlodymArray.from_dims_superset(
+                dims_superset = self.dims,
+                dim_letters = ('r',),
                 values = np.array([0.2 if self.prms["industrialized_regions"][{"r": region}].values else 0.4 for region in self.dims["r"].items])
             ),
             "building_split": 0.2,
@@ -331,7 +365,7 @@ class ParameterReconciliation:
             out = default_rel_std
         
         if isinstance(out, (float, int)):
-            out = fd.FlodymArray(dims=fd.DimensionSet(dim_list=[]), values=np.array(out))
+            out = fd.FlodymArray.scalar(out)
         
         out = out.cast_to(self.prms_adj_dims[prm_name])
         return out
