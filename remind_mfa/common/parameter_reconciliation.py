@@ -28,9 +28,11 @@ class ParameterReconciliation:
         self.correct_parameters()
 
     def prepare_dims(self, dims: fd.DimensionSet):
+        self.input_dims = deepcopy(dims)
         self.dims = dims.replace('s', self._reduced_stock_type)
     
     def prepare_prms(self, prms: dict[str, fd.Parameter]):
+        self.input_prms = deepcopy(prms)
         self.prms: dict[str, fd.Parameter] = {}
         self.prms_adj_dims: dict[str, fd.DimensionSet] = {}
         for key, val in prms.items():
@@ -59,45 +61,15 @@ class ParameterReconciliation:
         self.calc_corrections()
 
         # TODO see if I really want to do the mulitplication here, or rather in parameter extrapolation?
+        self.output_prms = deepcopy(self.input_prms)
         for prm_name, c in self.correction_factors.items():
             # TODO do I want to do the correction directy on self.prms, or rather return and or create self.corrected_prms?
-            self.prms[prm_name] = self.prms[prm_name] * c
+            c = self.cast_correction_to_original_prm_dim(c)
+            self.output_prms[prm_name] = self.input_prms[prm_name] * c
             self.normalize_parameter(prm_name)
             # TODO the parameters need to get their original dimensions back?
 
         print("done")
-
-    def normalize_parameter(self, prm_name: str):
-        """
-        Normalize share or split parameters to sum up to 1 along their relevant dimensions.
-        """
-        # TODO find better way to know which parameters need normalization and along which dimensions
-        normalization_dims = {
-            "building_split": ("Structure", "Function",),
-            "product_application_split": ("Product Application",),
-            "product_material_split": ("Product Material",),
-            "stock_type_split": ("Reduced Stock Type",),
-        
-        }
-        if prm_name not in normalization_dims:
-            return
-        
-        prm = self.prms[prm_name]
-        if prm_name == "product_application_split":
-            # TODO redefine parameter such that no such special treatment is necessary
-            concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
-            mortar_application_dim = fd.Dimension(name="Mortar Product Application", letter="z", items=['finishing', 'masonry', 'maintenance'])
-            concrete_prm = prm[{'a': concrete_application_dim}]
-            mortar_prm = prm[{'a': mortar_application_dim}]
-            sum_concrete = concrete_prm.sum_over('y')
-            sum_mortar = mortar_prm.sum_over('z')
-            prm[{'a': concrete_application_dim}] = concrete_prm / sum_concrete
-            prm[{'a': mortar_application_dim}] = mortar_prm / sum_mortar
-        else: 
-            prm_sum = prm.sum_over(normalization_dims[prm_name])
-            prm = prm / prm_sum
-        return
-
 
     def calc_bottom_up_stock(self, prm: dict[str, fd.FlodymArray]):
         stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
@@ -392,7 +364,57 @@ class ParameterReconciliation:
         reshaped_values = flat_arr.reshape(target_dims.shape)
         return fd.FlodymArray(dims=target_dims, values=reshaped_values)
     
+    def cast_correction_to_original_prm_dim(self, correction_factor: fd.FlodymArray) -> fd.FlodymArray:
+        if self._reduced_stock_type.letter not in correction_factor.dims.letters:
+            return correction_factor
+        
+        # build new correction factor
+        new_dims = correction_factor.dims.replace(self._reduced_stock_type.letter, self.input_dims["s"])
+        new_correction = fd.FlodymArray.ones(dims=new_dims)
+
+        # fill calculated correction values where possible
+        new_correction[{"s": self._reduced_stock_type}] = correction_factor
+        return new_correction
+
+
+    def normalize_parameter(self, prm_name: str):
+        """
+        Normalize share or split parameters to sum up to 1 along their relevant dimensions.
+        """
+        # TODO find better way to know which parameters need normalization and along which dimensions
+        normalization_dims = {
+            "building_split": ("Structure", "Function",),
+            "product_application_split": ("Product Application",),
+            "product_material_split": ("Product Material",),
+            "stock_type_split": ("Stock Type",),
+        
+        }
+        if prm_name not in normalization_dims:
+            return
+        
+        prm = self.output_prms[prm_name]
+        if prm_name == "product_application_split":
+            # TODO redefine parameter such that no such special treatment is necessary
+            concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
+            mortar_application_dim = fd.Dimension(name="Mortar Product Application", letter="z", items=['finishing', 'masonry', 'maintenance'])
+            concrete_prm = prm[{'a': concrete_application_dim}]
+            mortar_prm = prm[{'a': mortar_application_dim}]
+            sum_concrete = concrete_prm.sum_over('y')
+            sum_mortar = mortar_prm.sum_over('z')
+            prm[{'a': concrete_application_dim}] = concrete_prm / sum_concrete
+            prm[{'a': mortar_application_dim}] = mortar_prm / sum_mortar
+        else: 
+            prm_sum = prm.sum_over(normalization_dims[prm_name])
+            # avoid division by zero: zero values can occur due to `self._reduced_stock_type`
+            if "s" in prm_sum.dims.letters:
+                prm_sum.values[prm_sum.values == 0] = 1
+            prm = prm / prm_sum
+    
     def system_model(self, prms: dict[str, fd.FlodymArray]) -> fd.FlodymArray:
+        """This can be used with original parameter dimensions."""
+        for key, prm in prms.items():
+            if "s" in prm.dims.letters:
+                prms[key] = prm[{"s": self._reduced_stock_type}]
         td = self.calc_top_down_stock(prms)
         bu = self.calc_bottom_up_stock(prms)
         return td / bu
