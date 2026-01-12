@@ -32,7 +32,7 @@ class CementModel(CommonModel):
     custom_scn_prm_def = cement_scn_prm_def
 
     def get_long_term_stock(self) -> fd.FlodymArray:
-        """Extrapolate in use stock to future."""
+        """Extrapolate in use cement stock to future. Transform to product stock."""
 
         indep_fit_dim_letters = ("r", "s")
         prm = self.parameters
@@ -130,5 +130,17 @@ class CementModel(CommonModel):
             "Independent fit of stretch_factor and x_offset, within bounds. ",
         )
 
-        total_in_use_stock = self.stock_handler.stocks
-        return total_in_use_stock
+        cement_stock = self.stock_handler.stocks
+
+        # transform cement stock to product stock
+        cement_ratio = (
+            prm["product_cement_content"] / prm["product_density"]
+        )
+        product_stock = cement_stock * (
+            prm["product_material_split"]
+            * prm["product_material_application_transform"]
+            * prm["product_application_split"]
+            / cement_ratio
+        )
+
+        return product_stock
