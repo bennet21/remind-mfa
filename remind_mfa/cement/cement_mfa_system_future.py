@@ -28,19 +28,12 @@ class StockDrivenCementMFASystem(CommonMFASystem):
         self.check_mass_balance()
         self.check_flows(raise_error=False)
 
-    def compute_in_use_stock(self, cement_stock_projection: fd.FlodymArray):
+    def compute_in_use_stock(self, product_stock_projection: fd.FlodymArray):
         prm = self.parameters
         stk = self.stocks
 
         # transform historic cement stock into product stock
-        stk["in_use"].stock = (
-            cement_stock_projection
-            * prm["product_material_split"]
-            * prm["product_material_application_transform"]
-            * prm["product_application_split"]
-            / self.cement_ratio
-        )
-
+        stk["in_use"].stock = product_stock_projection
         stk["in_use"].lifetime_model.set_prms(
             mean=prm["use_lifetime_mean"],
             std=prm["use_lifetime_rel_std"] * prm["use_lifetime_mean"],

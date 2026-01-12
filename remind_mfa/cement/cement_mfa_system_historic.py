@@ -22,7 +22,7 @@ class InflowDrivenHistoricCementMFASystem(CommonMFASystem):
         cement_consumption = (
             (1 - prm["cement_losses"])
             * (prm["cement_production"] - prm["cement_trade"])
-            * self.parameters["stock_type_split"]
+            * prm["stock_type_split"]
         )
 
         # in use
