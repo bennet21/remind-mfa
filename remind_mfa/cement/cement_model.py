@@ -14,8 +14,9 @@ from remind_mfa.common.stock_extrapolation import StockExtrapolation
 from remind_mfa.common.assumptions_doc import add_assumption_doc
 from remind_mfa.common.common_model import CommonModel
 from remind_mfa.cement.cement_definition import scenario_parameters as cement_scn_prm_def
+from remind_mfa.common.parameter_extrapolation import ParameterExtrapolationManager
 from remind_mfa.common.common_data_reader import CommonDataReader
-
+from remind_mfa.common.parameter_reconciliation import ParameterReconciliation
 
 class CementModel(CommonModel):
 
@@ -29,6 +30,39 @@ class CementModel(CommonModel):
     get_definition = staticmethod(get_cement_definition)
     custom_scn_prm_def = cement_scn_prm_def
 
+    def run(self):        
+        parameter_reconciliation = ParameterReconciliation(
+            self.parameters, self.dims, uncoupled=True
+        )
+        self.parameters = parameter_reconciliation.correct_parameters()
+
+        # --------------------------------------------------
+        # TODO remove later: This is only to ensure that coupled and uncoupled give the same result
+        if False:
+            coupled = ParameterReconciliation(
+                parameter_reconciliation.input_prms, self.dims, uncoupled=False
+            )
+            coupled.correct_parameters()
+            coupled_result = coupled.system_model(coupled.output_prms).values
+            uncoupled_result = parameter_reconciliation.system_model(parameter_reconciliation.output_prms).values
+            assert((coupled_result - uncoupled_result) < 1e-4).all()
+        # --------------------------------------------------
+        
+        self.historic_mfa = self.make_mfa(historic=True)
+        self.historic_mfa.compute()
+
+        historic_trade = self.historic_mfa.trade_set
+
+        stock_projection = self.get_long_term_stock()
+
+        # apply scenarios to parameters for future mfa
+        self.parameters = ParameterExtrapolationManager(
+            self.cfg, self.dims["t"]
+        ).apply_prm_extrapolation(self.parameters, self.scenario_parameters)
+
+        self.future_mfa = self.make_mfa(historic=False)
+        self.future_mfa.compute(stock_projection, historic_trade)
+        
     def read_data(self):
         # TODO find better way to allow missing values for material models
         self.data_reader = CommonDataReader(

@@ -25,7 +25,6 @@ class ParameterReconciliation:
 
         self.prepare_dims(dims)
         self.prepare_prms(prms)
-        self.correct_parameters()
 
     def prepare_dims(self, dims: fd.DimensionSet):
         self.input_dims = deepcopy(dims)
@@ -65,11 +64,11 @@ class ParameterReconciliation:
         for prm_name, c in self.correction_factors.items():
             # TODO do I want to do the correction directy on self.prms, or rather return and or create self.corrected_prms?
             c = self.cast_correction_to_original_prm_dim(c)
-            self.output_prms[prm_name] = self.input_prms[prm_name] * c
+            self.output_prms[prm_name][...] = self.input_prms[prm_name] * c
             self.normalize_parameter(prm_name)
             # TODO the parameters need to get their original dimensions back?
-
-        print("done")
+        
+        return self.output_prms
 
     def calc_bottom_up_stock(self, prm: dict[str, fd.FlodymArray]):
         stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
@@ -408,7 +407,7 @@ class ParameterReconciliation:
             # avoid division by zero: zero values can occur due to `self._reduced_stock_type`
             if "s" in prm_sum.dims.letters:
                 prm_sum.values[prm_sum.values == 0] = 1
-            prm = prm / prm_sum
+            prm[...] = prm / prm_sum
     
     def system_model(self, prms: dict[str, fd.FlodymArray]) -> fd.FlodymArray:
         """This can be used with original parameter dimensions."""
