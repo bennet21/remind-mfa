@@ -76,7 +76,7 @@ class ParameterReconciliation:
         stk = stk[{"t": self._year_of_reconciliation}]
 
         # build up new stock where function (f) and stock type (s) are merged into reduced stock type (u)
-        new_stk = fd.FlodymArray.zeros(dims=stk.dims.drop("f"))
+        new_stk = fd.FlodymArray(dims=stk.dims.drop("f"))
         new_stk[{'u': 'Res'}] = stk[{'f': 'RS', 'u': "Res"}] + stk[{'f': 'RM', 'u': "Res"}]
         new_stk[{'u': 'Com'}] = stk[{'f': 'Com', 'u': "Com"}]
         new_stk = new_stk.sum_over('b')
@@ -191,7 +191,7 @@ class ParameterReconciliation:
             J = (f_perturbed - f0) / epsilon
             return J
         
-        J = fd.FlodymArray.zeros(combined_dims)
+        J = fd.FlodymArray(dims=combined_dims)
 
         for slicer in self.iter_dim_slicers(reduced_dims):
             val = original_prm[slicer]
@@ -369,7 +369,7 @@ class ParameterReconciliation:
         
         # build new correction factor
         new_dims = correction_factor.dims.replace(self._reduced_stock_type.letter, self.input_dims["s"])
-        new_correction = fd.FlodymArray.ones(dims=new_dims)
+        new_correction = fd.FlodymArray.full(dims=new_dims, fill_value=1.0)
 
         # fill calculated correction values where possible
         new_correction[{"s": self._reduced_stock_type}] = correction_factor

@@ -62,6 +62,32 @@ class CementModel(CommonModel):
 
         self.future_mfa = self.make_mfa(historic=False)
         self.future_mfa.compute(stock_projection, historic_trade)
+
+        # Bottom up MFA
+        combined_stock = stock_projection.copy()
+
+        # build bottom up stock
+        prm = self.parameters
+        stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
+        bu_stock = fd.FlodymArray(dims=stk.dims.drop("f"))
+        bu_stock[{'s': 'Res'}] = stk[{'f': 'RS', 's': "Res"}] + stk[{'f': 'RM', 's': "Res"}]
+        bu_stock[{'s': 'Com'}] = stk[{'f': 'Com', 's': "Com"}]
+        bu_stock = bu_stock.sum_over('b')
+        bu_timedim = fd.Dimension(
+            name='bu_time',
+            letter='d',
+            items=[time for time in combined_stock.dims['t'].items if time > parameter_reconciliation._year_of_reconciliation]
+        )
+        concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
+        bu_stock = bu_stock * prm["product_application_split"][{'a': concrete_application_dim}]
+
+        # replace top-down stock with bottom-up stock where available
+        # TODO flodym fix required to apply mask at once
+        combined_stock[{'a': concrete_application_dim, 'm': 'concrete'}][{'t': bu_timedim}] = bu_stock[{'t': bu_timedim}]
+
+        # compute complete mfa
+        self.bottom_up_mfa = self.make_mfa(historic=False)
+        self.bottom_up_mfa.compute(combined_stock, historic_trade)
         
     def read_data(self):
         # TODO find better way to allow missing values for material models

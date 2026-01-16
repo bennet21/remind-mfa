@@ -33,7 +33,7 @@ class StockDrivenCementMFASystem(CommonMFASystem):
         stk = self.stocks
 
         # transform historic cement stock into product stock
-        stk["in_use"].stock = product_stock_projection
+        stk["in_use"].stock[...] = product_stock_projection
         stk["in_use"].lifetime_model.set_prms(
             mean=prm["use_lifetime_mean"],
             std=prm["use_lifetime_rel_std"] * prm["use_lifetime_mean"],
