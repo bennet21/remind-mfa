@@ -1,4 +1,5 @@
 from typing import Union, Any
+from numbers import Number
 
 import flodym as fd
 import numpy as np
@@ -9,8 +10,8 @@ def blend(
     y_lower: fd.FlodymArray,
     y_upper: fd.FlodymArray,
     x: Union[fd.FlodymArray, str],  # str: dimension letter
-    x_lower: Union[fd.FlodymArray, int, float],
-    x_upper: Union[fd.FlodymArray, int, float],
+    x_lower: Union[fd.FlodymArray, Number],
+    x_upper: Union[fd.FlodymArray, Number],
     type: str = "poly_mix",
 ) -> fd.FlodymArray:
     if isinstance(x, str):
@@ -89,7 +90,7 @@ def blending_factor(x: np.ndarray, type: str) -> np.ndarray:
 
 
 def prepare_array(value: Any, target_dims: fd.DimensionSet) -> fd.FlodymArray:
-    if isinstance(value, (int, float)):
+    if isinstance(value, Number):
         array = fd.FlodymArray(dims=target_dims)
         array[...] = value
     elif isinstance(value, fd.FlodymArray):
