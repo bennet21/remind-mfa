@@ -1,5 +1,4 @@
 import numpy as np
-
 import flodym as fd
 
 from remind_mfa.cement.cement_config import CementCfg
@@ -76,18 +75,20 @@ class CementModel(CommonModel):
         bu_timedim = fd.Dimension(
             name='bu_time',
             letter='d',
-            items=[time for time in combined_stock.dims['t'].items if time > parameter_reconciliation._year_of_reconciliation]
+            items=[time for time in combined_stock.dims['t'].items if time > self.dims['Historic Time'].items[-1]]
         )
         concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
         bu_stock = bu_stock * prm["product_application_split"][{'a': concrete_application_dim}]
+        reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
 
         # replace top-down stock with bottom-up stock where available
-        # TODO flodym fix required to apply mask at once
-        combined_stock[{'a': concrete_application_dim, 'm': 'concrete'}][{'t': bu_timedim}] = bu_stock[{'t': bu_timedim}]
+        bu_mask = {'t': bu_timedim, 'm': 'concrete', 'a': concrete_application_dim, 's': reduced_stock_type}
+        bu_stock_future = bu_stock[{'t': bu_timedim, 's': reduced_stock_type}]
+        combined_stock[bu_mask] = bu_stock_future
 
-        # compute complete mfa
-        self.bottom_up_mfa = self.make_mfa(historic=False)
-        self.bottom_up_mfa.compute(combined_stock, historic_trade)
+        # compute combined mfa
+        self.combined_mfa = self.make_mfa(historic=False)
+        self.combined_mfa.compute(combined_stock, historic_trade)
         
     def read_data(self):
         # TODO find better way to allow missing values for material models
