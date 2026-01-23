@@ -29,11 +29,15 @@ class CementModel(CommonModel):
     get_definition = staticmethod(get_cement_definition)
     custom_scn_prm_def = cement_scn_prm_def
 
-    def run(self):        
-        parameter_reconciliation = ParameterReconciliation(
-            self.parameters, self.dims, uncoupled=True
-        )
-        self.parameters = parameter_reconciliation.correct_parameters()
+    def run(self):
+        self.original_parameters = self.parameters.copy()
+
+        if self.cfg.model_switches.parameter_reconciliation.get("do_reconcile"):
+            for i in range(self.cfg.model_switches.parameter_reconciliation["number_of_reconciliation_iterations"]):
+                parameter_reconciliation = ParameterReconciliation(
+                    self.cfg, self.parameters, self.dims, uncoupled=True
+                )
+                self.parameters = parameter_reconciliation.correct_parameters()
 
         # --------------------------------------------------
         # TODO remove later: This is only to ensure that coupled and uncoupled give the same result

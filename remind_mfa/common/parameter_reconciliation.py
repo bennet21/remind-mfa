@@ -4,15 +4,18 @@ import flodym as fd
 import logging
 import itertools
 
+from remind_mfa.cement.cement_config import CementCfg
+
 from copy import deepcopy
 class ParameterReconciliation:
     """Parameter reconciliation of top-down and bottom-up models."""
     # TODO inherit from separate helper class?
     # TODO pydantic?
 
-    def __init__(self, prms: dict[str, fd.Parameter], dims: fd.DimensionSet, uncoupled: bool = False):
-
-        self._year_of_reconciliation = 2020
+    def __init__(self, cfg: "CementCfg", prms: dict[str, fd.Parameter], dims: fd.DimensionSet, uncoupled: bool = False):
+        
+        self.cfg = cfg
+        self._year_of_reconciliation = self.cfg.model_switches.parameter_reconciliation["year_of_reconciliation"]
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
         # save computation time
         self._no_correction_dim_letters = ('t', 'h') # instead of df/dx, now calculating df/dd 

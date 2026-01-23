@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Union
 from remind_mfa.common.common_config import (
     CommonCfg,
     ModelSwitches,
@@ -15,6 +16,7 @@ class CementModes(str, Enum):
 
 class CementModelSwitches(ModelSwitches):
     mode: CementModes
+    parameter_reconciliation: dict[str, Union[bool, int]]
 
     @property
     def carbon_flow(self) -> bool:

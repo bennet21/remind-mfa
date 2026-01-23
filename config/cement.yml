@@ -4,7 +4,7 @@ input:
   madrat_output_path: '../madrat_wd/output'
   force_extract_tgz: False
   input_data_path: '../remind_mfa_data/h12'
-  input_data_version: 'rev0_h12_4f8fd1ed_mfa'
+  input_data_version: 'rev0noFloorspaceCorrection_h12_4f8fd1ed_mfa'
   scenarios_path: 'config/scenarios'
 
 model_switches:
@@ -17,6 +17,10 @@ model_switches:
     clinker_ratio: 'ConstantExtrapolation'
     use_lifetime_mean: 'ConstantExtrapolation'
     cement_trade: 'ZeroExtrapolation'
+  parameter_reconciliation:
+    do_reconcile: True
+    year_of_reconciliation: 2023
+    number_of_reconciliation_iterations: 3
 
 visualization:
   do_visualize: True
@@ -56,7 +60,7 @@ visualization:
   extrapolation:
     do_visualize: True
   carbonation:
-    do_visualize: True
+    do_visualize: False
 
 export:
   do_export: False
