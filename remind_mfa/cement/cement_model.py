@@ -16,6 +16,7 @@ from remind_mfa.cement.cement_definition import scenario_parameters as cement_sc
 from remind_mfa.common.parameter_extrapolation import ParameterExtrapolationManager
 from remind_mfa.common.common_data_reader import CommonDataReader
 from remind_mfa.common.parameter_reconciliation import ParameterReconciliation
+from remind_mfa.cement.cement_stock_models import CementStockModels
 
 class CementModel(CommonModel):
 
@@ -71,23 +72,21 @@ class CementModel(CommonModel):
 
         # build bottom up stock
         prm = self.parameters
-        stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
-        bu_stock = fd.FlodymArray(dims=stk.dims.drop("f"))
-        bu_stock[{'s': 'Res'}] = stk[{'f': 'RS', 's': "Res"}] + stk[{'f': 'RM', 's': "Res"}]
-        bu_stock[{'s': 'Com'}] = stk[{'f': 'Com', 's': "Com"}]
-        bu_stock = bu_stock.sum_over('b')
+        self.bu_stock = CementStockModels.calc_stock_bottom_up_minimal(prm, stock_type_dimletter='s')
+        
+        # transform bottom-up stock to td stock dimensions
+        concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
+        self.bu_stock = self.bu_stock * prm["product_application_split"][{'a': concrete_application_dim}]
+        reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
+
+        # replace top-down stock with bottom-up stock in future where available
         bu_timedim = fd.Dimension(
             name='bu_time',
             letter='d',
-            items=[time for time in combined_stock.dims['t'].items if time > self.dims['Historic Time'].items[-1]]
+            items=[time for time in combined_stock.dims['t'].items if time > self.cfg.model_switches.parameter_reconciliation['year_of_reconciliation']]
         )
-        concrete_application_dim = fd.Dimension(name="Concrete Product Application", letter="y", items=['C15', 'C20', 'C30', 'C35'])
-        bu_stock = bu_stock * prm["product_application_split"][{'a': concrete_application_dim}]
-        reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
-
-        # replace top-down stock with bottom-up stock where available
         bu_mask = {'t': bu_timedim, 'm': 'concrete', 'a': concrete_application_dim, 's': reduced_stock_type}
-        bu_stock_future = bu_stock[{'t': bu_timedim, 's': reduced_stock_type}]
+        bu_stock_future = self.bu_stock[{'t': bu_timedim, 's': reduced_stock_type}]
         combined_stock[bu_mask] = bu_stock_future
 
         # compute combined mfa
@@ -206,16 +205,6 @@ class CementModel(CommonModel):
         )
 
         cement_stock = self.stock_handler.stocks
-
-        # transform cement stock to product stock
-        cement_ratio = (
-            prm["product_cement_content"] / prm["product_density"]
-        )
-        product_stock = cement_stock * (
-            prm["product_material_split"]
-            * prm["product_material_application_transform"]
-            * prm["product_application_split"]
-            / cement_ratio
-        )
+        product_stock = CementStockModels.transfrom_cement_to_product_stock(prm, cement_stock)
 
         return product_stock

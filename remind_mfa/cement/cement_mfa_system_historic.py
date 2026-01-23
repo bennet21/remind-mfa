@@ -1,6 +1,6 @@
-from remind_mfa.common.assumptions_doc import add_assumption_doc
 from remind_mfa.common.common_mfa_system import CommonMFASystem
 from remind_mfa.cement.cement_config import CementCfg
+from remind_mfa.cement.cement_stock_models import CementStockModels
 
 
 class InflowDrivenHistoricCementMFASystem(CommonMFASystem):
@@ -17,21 +17,8 @@ class InflowDrivenHistoricCementMFASystem(CommonMFASystem):
         self.check_flows()
 
     def compute_in_use_stock(self):
-        prm = self.parameters
-        stk = self.stocks
-        cement_consumption = (
-            (1 - prm["cement_losses"])
-            * (prm["cement_production"] - prm["cement_trade"])
-            * prm["stock_type_split"]
-        )
-
-        # in use
-        stk["historic_cement_in_use"].inflow[...] = cement_consumption
-        stk["historic_cement_in_use"].lifetime_model.set_prms(
-            mean=prm["use_lifetime_mean"],
-            std=prm["use_lifetime_rel_std"] * prm["use_lifetime_mean"],
-        )
-        stk["historic_cement_in_use"].compute()
+        stk = self.stocks["historic_cement_in_use"]
+        stk = CementStockModels.calc_cement_stock_top_down(self.parameters, stk)
 
     def compute_flows(self):
         flw = self.flows

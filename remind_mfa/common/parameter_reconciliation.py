@@ -5,6 +5,7 @@ import logging
 import itertools
 
 from remind_mfa.cement.cement_config import CementCfg
+from remind_mfa.cement.cement_stock_models import CementStockModels
 
 from copy import deepcopy
 class ParameterReconciliation:
@@ -38,10 +39,15 @@ class ParameterReconciliation:
         self.prms: dict[str, fd.Parameter] = {}
         self.prms_adj_dims: dict[str, fd.DimensionSet] = {}
         for key, val in prms.items():
+            # reduce stock type dimension
             if "s" in val.dims.letters:
                 val = val[{"s": self._reduced_stock_type}]
+            # remove time dimension
+            if key in ["floorspace"]:
+                val = val[{"t": self._year_of_reconciliation}]
             self.prms[key] = val
             self.prms_adj_dims[key] = self.remove_fd_dims_if_present(val.dims, self._no_correction_dim_letters)
+            
     
     @staticmethod
     def remove_fd_dims_if_present(dims: fd.DimensionSet, letters_to_remove: Tuple) -> fd.DimensionSet:
@@ -69,58 +75,29 @@ class ParameterReconciliation:
             c = self.cast_correction_to_original_prm_dim(c)
             self.output_prms[prm_name][...] = self.input_prms[prm_name] * c
             self.normalize_parameter(prm_name)
-            # TODO the parameters need to get their original dimensions back?
-        
+            # transform from FlodymArray to Parameter
+            self.output_prms[prm_name] = fd.Parameter(
+                name=self.output_prms[prm_name].name,
+                dims=self.output_prms[prm_name].dims,
+                values=self.output_prms[prm_name].values,
+            )
         return self.output_prms
 
     def calc_bottom_up_stock(self, prm: dict[str, fd.FlodymArray]):
-        stk = prm["concrete_building_mi"] * prm["building_split"] * prm["floorspace"]
-
-        stk = stk[{"t": self._year_of_reconciliation}]
-
-        # build up new stock where function (f) and stock type (s) are merged into reduced stock type (u)
-        new_stk = fd.FlodymArray(dims=stk.dims.drop("f"))
-        new_stk[{'u': 'Res'}] = stk[{'f': 'RS', 'u': "Res"}] + stk[{'f': 'RM', 'u': "Res"}]
-        new_stk[{'u': 'Com'}] = stk[{'f': 'Com', 'u': "Com"}]
-        new_stk = new_stk.sum_over('b')
-        return new_stk
+        return CementStockModels.calc_stock_bottom_up_minimal(
+            prm, 
+            stock_type_dimletter=self._reduced_stock_type.letter
+        )
     
     def calc_top_down_stock(self, prm: dict[str, fd.FlodymArray]):
-        # TODO find a way to use historic cement mfa here
-        cement_consumption = (
-            (1 - prm["cement_losses"])
-            * (prm["cement_production"] - prm["cement_trade"])
-            * prm["stock_type_split"]
-        )
-
-        # cement stock
-        stk = fd.InflowDrivenDSM(
-            dims=self.dims[cement_consumption.dims.letters],
-            lifetime_model=fd.LogNormalLifetime,
+        stk = CementStockModels.calc_stock_top_down_minimal(
+            prm,
+            lifetime_model=fd.LogNormalLifetime, # TODO take this from cfg
             time_letter="h",
         )
-        stk.inflow[...] = cement_consumption
-        stk.lifetime_model.set_prms(
-            mean=prm["use_lifetime_mean"],
-            std=prm["use_lifetime_rel_std"] * prm["use_lifetime_mean"],
-        )
-        stk.compute()
 
-        # product stock
-        cement_ratio = (
-            prm["product_cement_content"] / prm["product_density"]
-        )
-        stk = stk.stock * (
-            prm["product_material_split"]
-            * prm["product_material_application_transform"]
-            * prm["product_application_split"]
-            / cement_ratio
-        )
-        
-        # reduce redudant dimensions
+        # TODO see if there is a way to only calculate this year in the first place
         stk = stk[{"h": self._year_of_reconciliation}]
-        stk = stk[{"m": "concrete"}]
-        stk = stk.sum_over("a")
         return stk
     
     def pre_compute_sensitivity(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, denominator: bool = False):
@@ -158,6 +135,7 @@ class ParameterReconciliation:
         return spy_prms.accessed_keys
     
     def calc_sensitivity(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, prm_name: str, denominator: bool = False):
+        # TODO set jacobian to zero if std is zero.
         J = self.calc_jacobian(f, f0, prm_name)
         
         if self.output_dims_are_independent:
@@ -320,13 +298,26 @@ class ParameterReconciliation:
         default_rel_std = 0.2
 
         rel_std = {
+            # BU parameters
             "concrete_building_mi": fd.FlodymArray.from_dims_superset(
                 dims_superset = self.dims,
                 dim_letters = ('r',),
-                values = np.array([0.2 if self.prms["industrialized_regions"][{"r": region}].values else 0.4 for region in self.dims["r"].items])
+                values = np.array([0.2 if self.prms["industrialized_regions"][{"r": region}].values else 0.5 for region in self.dims["r"].items])
             ),
             "building_split": 0.2,
-            "floorspace": 0.2
+            "floorspace": 1.,
+            # TD parameters
+            "cement_losses": 0.2,
+            "cement_production": 0.01,
+            "cement_trade": 0.0,
+            "product_application_split": 0.4,
+            "product_cement_content": 0.1,
+            "product_density": 0.05,
+            "product_material_application_transform": 0.0,
+            "product_material_split": 0.4,
+            "stock_type_split": 0.5,
+            "use_lifetime_mean": 0.6,
+            "use_lifetime_rel_std": 0.4,
         }
 
         out = rel_std.get(prm_name)
