@@ -3,6 +3,8 @@ from typing import Callable, Tuple, Optional
 import flodym as fd
 import logging
 import itertools
+import math
+import random
 
 from remind_mfa.cement.cement_config import CementCfg
 from remind_mfa.cement.cement_stock_models import CementStockModels
@@ -425,3 +427,147 @@ class DependencyTracker(dict):
         
         # 2. Return the actual value so the math doesn't crash
         return super().__getitem__(key)
+    
+
+class AnalyzeParameterReconciliation:
+    """Class to analyze parameter reconciliation results."""
+    
+    def __init__(
+            self,
+            pr: "ParameterReconciliation",
+            original_prms: dict[str, fd.Parameter],
+            adjusted_prms: dict[str, fd.Parameter],
+        ):
+        self.pr = pr
+        self.original_prms = deepcopy(original_prms)
+        self.adjusted_prms = deepcopy(adjusted_prms)
+
+        self.original_prms['floorspace'] = self.original_prms['floorspace'][{'t': pr._year_of_reconciliation}]
+        self.adjusted_prms['floorspace'] = self.adjusted_prms['floorspace'][{'t': pr._year_of_reconciliation}]
+
+        # TODO I could also scale down to pr._reduced_stock_type here
+    
+    def calc_parameter_impact(
+        self,
+        f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray],
+        max_permutations: int = 100,
+        random_seed: Optional[int] = None,
+    ):
+        """
+        Calculate parameter impact using Shapley values.
+        
+        If the number of permutations (n!) exceeds max_permutations, Monte Carlo
+        sampling is used instead of exhaustive enumeration.
+        
+        Args:
+            f: Model function that takes parameters and returns a FlodymArray.
+            max_permutations: Maximum number of permutations to evaluate. If n! exceeds
+                this, random sampling is used. Default is 1000 (covers up to n=6 exactly,
+                n=7 would be 5040 permutations).
+            random_seed: Optional seed for reproducibility when using Monte Carlo sampling.
+        
+        Returns:
+            FlodymArray with Shapley values for each parameter.
+        """
+        relevant_prm_names = list(self.pr.get_relevant_parameters(f, self.original_prms))
+
+        # for N parameters, there are N! permutations
+        n = len(relevant_prm_names)
+        total_permutations = math.factorial(n)
+        
+        # Decide whether to use full enumeration or Monte Carlo sampling
+        use_monte_carlo = total_permutations > max_permutations
+        num_samples = min(total_permutations, max_permutations)
+        
+        if use_monte_carlo:
+            logging.info(
+                f"Using Monte Carlo sampling for Shapley values: {num_samples} samples "
+                f"out of {total_permutations} possible permutations (n={n} parameters)."
+            )            
+            permutation_iterator = self.get_random_permutations(relevant_prm_names, num_samples, random_seed=random_seed)
+        else:
+            logging.info(
+                f"Using full enumeration for Shapley values: {total_permutations} permutations (n={n} parameters)."
+            )
+            permutation_iterator = itertools.permutations(relevant_prm_names)
+
+        # Initialize FlodymArray where total parameter contribution is stored
+        f_dims = f(self.original_prms).dims
+        param_dim = fd.Dimension(name="Parameter", letter="p", items=relevant_prm_names)
+        dims = f_dims.prepend(param_dim)
+        shapley_sums = fd.FlodymArray(dims=dims)
+        
+        i = 0
+        for permutation in permutation_iterator:
+            i += 1
+            print(i)
+            if i >= num_samples:
+                break
+            # Initialize the current parameters at original values
+            p = {
+                name: self.original_prms[name].copy() for name in relevant_prm_names
+            }
+            # Initialize the current state of f
+            f0 = f(p)
+            
+            for prm_name in permutation:
+                # Update ONE parameter to its 'adjusted' value
+                p[prm_name] = self.adjusted_prms[prm_name]
+                # Calculate new f value after change
+                fnew = f(p)
+                # Calculate marginal contribution
+                marginal_contribution = fnew - f0
+                # Add to the running total contribution of this parameter
+                shapley_sums[prm_name] += marginal_contribution
+                # Update f0 so the next parameter adds on top of this one
+                f0 = fnew
+
+        shapley_values = shapley_sums / num_samples
+
+        if use_monte_carlo:
+            # Calculate the total change caused by all parameters
+            total_change = f(self.adjusted_prms) - f(self.original_prms)
+
+            # Normalize Shapley values to ensure they sum to the total change
+            shapley_sum = shapley_values.sum_over("p")
+            normalization_factor = total_change / shapley_sum
+            shapley_values *= normalization_factor
+            if np.abs(normalization_factor.values).max() > 1.05:
+                logging.warning(
+                    "Large normalization factor applied to Shapley values: %s",
+                    normalization_factor.values,
+                )
+        
+        return shapley_values
+    
+    @staticmethod
+    def get_random_permutations(elements, k, random_seed=None):
+        """
+        Returns k unique permutations, automatically selecting the best strategy
+        based on the size of the input list. Respects the random seed if provided.
+        """
+        if random_seed is not None:
+            random.seed(random_seed)
+
+        n = len(elements)
+        max_perms = math.factorial(n)
+        
+        if k > max_perms:
+            raise ValueError(f"Limit exceeded: You requested {k} permutations, but only {max_perms} exist.")
+
+        # STRATEGY 1: POOL METHOD
+        # If the total number of possibilities is small (e.g., < 50,000), 
+        # it is faster to build them all and sample.
+        # n=8 is 40,320 perms. n=9 is 362,880 perms.
+        if max_perms < 5e4:
+            all_perms = list(itertools.permutations(elements))
+            return random.sample(all_perms, k)
+
+        # STRATEGY 2: SET / REJECTION METHOD
+        # For large lists, the universe of permutations is huge.
+        # Probability of collision is low, so we just pick until we have k.
+        unique_perms = set()
+        while len(unique_perms) < k:
+            unique_perms.add(tuple(random.sample(elements, n)))
+            
+        return [list(p) for p in unique_perms]

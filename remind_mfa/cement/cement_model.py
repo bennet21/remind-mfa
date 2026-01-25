@@ -15,7 +15,7 @@ from remind_mfa.common.common_model import CommonModel
 from remind_mfa.cement.cement_definition import scenario_parameters as cement_scn_prm_def
 from remind_mfa.common.parameter_extrapolation import ParameterExtrapolationManager
 from remind_mfa.common.common_data_reader import CommonDataReader
-from remind_mfa.common.parameter_reconciliation import ParameterReconciliation
+from remind_mfa.common.parameter_reconciliation import ParameterReconciliation, AnalyzeParameterReconciliation
 from remind_mfa.cement.cement_stock_models import CementStockModels
 
 class CementModel(CommonModel):
@@ -35,10 +35,11 @@ class CementModel(CommonModel):
 
         if self.cfg.model_switches.parameter_reconciliation.get("do_reconcile"):
             for i in range(self.cfg.model_switches.parameter_reconciliation["number_of_reconciliation_iterations"]):
-                parameter_reconciliation = ParameterReconciliation(
+                self.parameter_reconciliation = ParameterReconciliation(
                     self.cfg, self.parameters, self.dims, uncoupled=True
                 )
-                self.parameters = parameter_reconciliation.correct_parameters()
+                self.reconciled_parameters = self.parameter_reconciliation.correct_parameters()
+                self.parameters = self.reconciled_parameters
 
         # --------------------------------------------------
         # TODO remove later: This is only to ensure that coupled and uncoupled give the same result

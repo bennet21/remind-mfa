@@ -73,6 +73,4 @@ class CementStockModels:
 
         stk = product_stk[{"m": "concrete"}]
         stk = stk.sum_over("a")
-
         return stk
-
