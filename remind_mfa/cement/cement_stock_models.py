@@ -5,7 +5,7 @@ class CementStockModels:
     
     @staticmethod
     def calc_stock_bottom_up(prms: dict[str, fd.Parameter]):
-        stk = prms["concrete_building_mi"] * prms["building_split"] * prms["floorspace"]
+        stk = prms["concrete_building_mi"] * prms["function_buildings_split"] * prms["structure_buildings_split"] * prms["floorspace"]
         return stk
 
     @staticmethod

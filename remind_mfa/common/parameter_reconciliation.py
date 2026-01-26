@@ -306,7 +306,8 @@ class ParameterReconciliation:
                 dim_letters = ('r',),
                 values = np.array([0.2 if self.prms["industrialized_regions"][{"r": region}].values else 0.5 for region in self.dims["r"].items])
             ),
-            "building_split": 0.2,
+            "function_buildings_split": 0.2,
+            "structure_buildings_split": 0.2,
             "floorspace": 1.,
             # TD parameters
             "cement_losses": 0.2,
