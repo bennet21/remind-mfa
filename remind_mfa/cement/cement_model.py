@@ -81,18 +81,37 @@ class CementModel(CommonModel):
         reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
 
         # replace top-down stock with bottom-up stock in future where available
+        last_historic_time = self.historic_mfa.dims['h'].items[-1]
+        first_bu_year = 1990
         bu_timedim = fd.Dimension(
             name='bu_time',
             letter='d',
-            items=[time for time in combined_stock.dims['t'].items if time > self.cfg.model_switches.parameter_reconciliation['year_of_reconciliation']]
+            items=[time for time in combined_stock.dims['t'].items if time > first_bu_year]
         )
         bu_mask = {'t': bu_timedim, 'm': 'concrete', 'a': concrete_application_dim, 's': reduced_stock_type}
-        bu_stock_future = self.bu_stock[{'t': bu_timedim, 's': reduced_stock_type}]
-        combined_stock[bu_mask] = bu_stock_future
+        bu_stock_real = self.bu_stock[{'t': bu_timedim, 's': reduced_stock_type}]
+        # this stock has bu stocks even in the past, if available
+        combined_stock[bu_mask] = bu_stock_real
+
+        # Apply Gauss correction at the historic-future interface
+        historic_timedim = self.historic_mfa.dims["h"]
+        
+        blended_combined_stock = combined_stock.copy()
+        blended_combined_stock.values = StockExtrapolation.gaussian_correction(
+            historic=stock_projection[{"t": historic_timedim}].values,
+            prediction=combined_stock.values,
+            time=np.array(combined_stock.dims["t"].items),
+            n=3,
+            approaching_time_0th=30,
+            approaching_time_1st=20,
+        )
+
+        # after this, ensure that correct td historic values are used again
+        blended_combined_stock[{"t": historic_timedim}] = stock_projection[{"t": historic_timedim}]
 
         # compute combined mfa
         self.combined_mfa = self.make_mfa(historic=False)
-        self.combined_mfa.compute(combined_stock, historic_trade)
+        self.combined_mfa.compute(blended_combined_stock, historic_trade)
         
     def read_data(self):
         # TODO find better way to allow missing values for material models

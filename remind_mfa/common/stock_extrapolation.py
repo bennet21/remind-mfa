@@ -1,9 +1,9 @@
 import flodym as fd
 import numpy as np
-from typing import Tuple, Union, Type, Optional
+from typing import Tuple, Union, Optional
 from copy import deepcopy
+from numbers import Number
 
-from remind_mfa.common.data_extrapolations import Extrapolation
 from remind_mfa.common.data_transformations import broadcast_trailing_dimensions, BoundList
 from remind_mfa.common.assumptions_doc import add_assumption_doc
 from remind_mfa.common.helpers import RegressOverModes
@@ -180,7 +180,12 @@ class StockExtrapolation:
         pure_prediction = self.extrapolation.regress()
 
         if self.stock_correction == "gaussian_first_order":
-            prediction_out[...] = self.gaussian_correction(historic_in, pure_prediction, n_deriv)
+            prediction_out[...] = self.gaussian_correction(
+                historic=historic_in,
+                prediction=pure_prediction,
+                time=np.array(self.dims["t"].items),
+                n=n_deriv
+            )
             add_assumption_doc(
                 type="model assumption",
                 name="Usage of Gaussian correction",
@@ -232,21 +237,33 @@ class StockExtrapolation:
         predictor = np.log10(gdppc[...]) * weight + time[:, None, None]
         return predictor
 
+    @staticmethod
     def gaussian_correction(
-        self, historic: np.ndarray, prediction: np.ndarray, n: int = 5
+        historic: np.ndarray,
+        prediction: np.ndarray,
+        time: np.ndarray,
+        n: int = 5,
+        approaching_time_0th: Number = 50,
+        approaching_time_1st: Number = 30,
     ) -> np.ndarray:
         """
-        Gaussian smoothing of extrapolation between the historic and future interface to remove discontinuities
+        Gaussian smoothing of extrapolation on the historic and future interface to remove discontinuities
         of 0th and 1st order derivatives. Multiplies Gaussian with a Taylor expansion around
-        the difference beteween historic and fit.
+        the difference between historic and fit.
         Args:
             historic (np.ndarray): Historical stock data.
             prediction (np.ndarray): Predicted stock data from regression.
+            time (np.ndarray): Time array corresponding to the full stock data (historic and prediction).
             n (int): Number of years for the linear regression fit. Defaults to 5.
+            approaching_time_0th (Number): (Non-negative) number of years for the blending from historical to regressed in-use stocks.
+                After this time, the amplitude of the gaussian has decreased to 5%.
+                If 0, no blending is applied. Defaults to 50.
+            approaching_time_1st (Number): (Non-negative) number of years for the blending from historical to regressed in-use stock growth rates.
+                After this time, the amplitude of the gaussian has decreased to 5%.
+                If 0, no blending is applied. Defaults to 30.
         Returns:
             np.ndarray: Corrected stock data after applying Gaussian smoothing.
         """
-        time = np.array(self.dims["t"].items)
         last_history_idx = len(historic) - 1
         last_history_year = time[last_history_idx]
         # offset between historic and prediction at transition point
@@ -274,7 +291,6 @@ class StockExtrapolation:
             a = np.sqrt(np.log(20))
             return np.exp(-((a * t / approaching_time) ** 2))
 
-        approaching_time_0th = 50
         add_assumption_doc(
             type="integer number",
             name="years for absolute blending to regression",
@@ -283,7 +299,6 @@ class StockExtrapolation:
                 "Number of years for the blending from historical to regressed in-use stocks. "
             ),
         )
-        approaching_time_1st = 30
         add_assumption_doc(
             type="integer number",
             name="years for derivative blending to regression",
@@ -294,12 +309,19 @@ class StockExtrapolation:
             ),
         )
         time_extended = time.reshape(-1, *([1] * len(difference_0th.shape)))
-        corr0 = difference_0th * gaussian(time_extended - last_history_year, approaching_time_0th)
-        corr1 = (
-            difference_1st
-            * (time_extended - last_history_year)
-            * gaussian(time_extended - last_history_year, approaching_time_1st)
-        )
+        if approaching_time_0th == 0:
+            corr0 = 0
+        else:
+            corr0 = difference_0th * gaussian(time_extended - last_history_year, approaching_time_0th)
+
+        if approaching_time_1st == 0:
+            corr1 = 0
+        else:
+            corr1 = (
+                difference_1st
+                * (time_extended - last_history_year)
+                * gaussian(time_extended - last_history_year, approaching_time_1st)
+            )
         correction = corr0 + corr1
 
         return prediction[...] + correction
