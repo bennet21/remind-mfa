@@ -62,7 +62,7 @@ class CementModel(CommonModel):
 
         # apply scenarios to parameters for future mfa
         self.parameters = ParameterExtrapolationManager(
-            self.cfg, self.dims["t"]
+            self.cfg, self.dims["h"], self.dims["t"]
         ).apply_prm_extrapolation(self.parameters, self.scenario_parameters)
 
         self.future_mfa = self.make_mfa(historic=False)
@@ -81,7 +81,6 @@ class CementModel(CommonModel):
         reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
 
         # replace top-down stock with bottom-up stock in future where available
-        last_historic_time = self.historic_mfa.dims['h'].items[-1]
         first_bu_year = 1990
         bu_timedim = fd.Dimension(
             name='bu_time',

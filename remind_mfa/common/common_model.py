@@ -42,7 +42,7 @@ class CommonModel:
 
         # apply scenarios to parameters for future mfa
         self.parameters = ParameterExtrapolationManager(
-            self.cfg, self.dims["t"]
+            self.cfg, self.dims["h"], self.dims["t"]
         ).apply_prm_extrapolation(self.parameters, self.scenario_parameters)
 
         self.future_mfa = self.make_mfa(historic=False)
