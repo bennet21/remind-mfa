@@ -406,7 +406,19 @@ class StockExtrapolation(RemindMFABaseModel):
         delta_t = time_extended - last_history_year
 
         # Amplitude decreases to 5 percent after approaching_time years
-        k = 4.74 / approaching_time
+        k_base = 4.74 / approaching_time
+        # Allow faster transitions to avoid overshoot, but never faster than 20 years.
+        k_max = 4.47 / 20
+        # To avoid overshooting, k is increased to a minimum required value if necessary
+        k_adjusted = - np.divide(
+            difference_1st,
+            difference_0th,
+            out=np.zeros_like(difference_1st),
+            where=difference_0th != 0,
+        )
+        # If the overshoot is so fast that even increased k_max cannot avoid the overshoot,
+        # stick to k_base and accept overshoot
+        k = np.where((k_adjusted > k_base) & (k_adjusted <= k_max), k_adjusted, k_base)
 
         # Critically damped system solution
         correction = (difference_0th + (difference_1st + k * difference_0th) * delta_t) * np.exp(
