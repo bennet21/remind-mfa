@@ -132,6 +132,19 @@ class StockExtrapolation(RemindMFABaseModel):
         """
         self.predictor = self.get_predictor(self.gdppc.values)
 
+    def compute_income_weights(self) -> np.ndarray:
+        """Per-region logistic income weight in [0, 1] based on last historic GDP per capita.
+        ~1 for high-income (GDP ≥ ~80k), ~0.5 at ~40k, ~0 for low-income (GDP ≤ ~20k).
+        High-income → governed by local data (pen_common suppressed).
+        Low-income  → governed by global regression (pen_common at full strength).
+        """
+        last_hist_gdppc = self.parameters["gdppc"][{"t": self.dims["h"].items[-1]}].values
+        log_gdppc = np.log10(np.maximum(last_hist_gdppc, 1.0))
+        # k = 25.0 makes 30k ~0.02 and 50k ~0.98
+        k = 50
+        log_threshold = np.log10(40_000)
+        return 1.0 / (1.0 + np.exp(-k * (log_gdppc - log_threshold)))
+
     def get_predictor(self, gdppc: np.ndarray) -> np.ndarray:
         """Get regression predictor: Can be either log GDP per capita or a combination of log GDP per capita and time.
         In all cases, the predictor is standardized to have a mean of 0 and a range of approximately 1.
@@ -290,12 +303,14 @@ class StockExtrapolation(RemindMFABaseModel):
             ),
         }
         penalty_weights = {k: penalty_weights[k] / StockFitter.norm(order_of_magnitude[k]) for k in penalty_weights}
+        income_weights =self.compute_income_weights()
         stock_fitter = StockFitter(
             historic_stocks_pc=self.stocks_to_fit,
             extrapolation=self.extrapolation_single_predictor,
             predictor=self.single_predictor,
             dims_out=self.dims_out,
             penalty_weights=penalty_weights,
+            income_weights=income_weights,
         )
         self.fitted_regression = stock_fitter.fit()
 

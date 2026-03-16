@@ -12,6 +12,9 @@ class StockFitter(RemindMFABaseModel):
     dims_out: fd.DimensionSet
     penalty_weights: dict
     predictor: np.ndarray
+    income_weights: np.ndarray
+    """Per-region income weights in [0, 1]: ~1 for high-income, ~0 for low-income.
+    Computed in StockExtrapolation. Controls the common-vs-local penalty balance."""
     _n_hist: int = None
 
     @model_validator(mode="after")
@@ -63,6 +66,7 @@ class StockFitter(RemindMFABaseModel):
                     historic=self.historic_stocks_pc.values[:, ir, ig],
                     predictor=self.predictor[:, ir, ig],
                     prms_0=self.extrapolation.fit_prms[ig, :],
+                    income_weight=float(self.income_weights[ir]),
                 )
         values_out = self.extrapolation.func(
             self.predictor[np.newaxis, ...], np.moveaxis(prms[np.newaxis, ...], -1, 0)
@@ -72,7 +76,8 @@ class StockFitter(RemindMFABaseModel):
         return stocks_pc_out
 
     def fit_single(
-        self, historic: np.ndarray, predictor: np.ndarray, prms_0: np.ndarray
+        self, historic: np.ndarray, predictor: np.ndarray, prms_0: np.ndarray,
+        income_weight: float = 1.0,
     ) -> np.ndarray:
         """Carry out the fitting for a single good and region by minimizing the penalty function.
         Wraps/uses scipy's minimize function.
@@ -82,6 +87,8 @@ class StockFitter(RemindMFABaseModel):
             historic (np.ndarray): historic data
             predictor (np.ndarray): predictor, usually log(GDPpC)
             prms_0 (np.ndarray): initial guess for the parameters
+            income_weight (float): per-region income weight in [0,1]; high → governed by local data;
+              low → governed by common regression
 
         Returns:
             np.ndarray: fitted parameters fot that good and region
@@ -94,13 +101,13 @@ class StockFitter(RemindMFABaseModel):
         n = 50
         for offset in np.arange(0, 1.1, 1/n):
             x0[1] = prms_0[1] + offset
-            penalties.append(self.penalty(historic, predictor, x0, prms_0))
+            penalties.append(self.penalty(historic, predictor, x0, prms_0, income_weight))
         min_penalty_idx = np.argmin(penalties)
         x0[1] = prms_0[1] + np.arange(0, 1.1, 1/n)[min_penalty_idx]
 
         result = minimize(
-            fun=lambda prms: self.penalty(historic, predictor, prms, prms_0),
-            jac=lambda prms: self.jacobian(historic, predictor, prms, prms_0),
+            fun=lambda prms: self.penalty(historic, predictor, prms, prms_0, income_weight),
+            jac=lambda prms: self.jacobian(historic, predictor, prms, prms_0, income_weight),
             x0=x0,
             tol=0.001,
         )
@@ -110,7 +117,8 @@ class StockFitter(RemindMFABaseModel):
             raise RuntimeError(f"Optimization failed: {result.message}")
 
     def penalty(
-        self, historic: np.ndarray, predictor: np.ndarray, prms: np.ndarray, prms_0: np.ndarray
+        self, historic: np.ndarray, predictor: np.ndarray, prms: np.ndarray, prms_0: np.ndarray,
+        income_weight: float = 1.0,
     ) -> np.ndarray:
         """Absolute penalty function to be minimized in the fitting process.
 
@@ -121,6 +129,7 @@ class StockFitter(RemindMFABaseModel):
               iteratively by scipy's optimization algorithm
             prms_0 (np.ndarray): initial guess for the parameters, used in the penalty to avoid
               unreasonably large deviations from the initial guess
+            income_weight (float): per-region income weight in [0,1]
 
         Returns:
             np.ndarray: penalty value for the given parameters, to be minimized in the fitting process
@@ -129,7 +138,8 @@ class StockFitter(RemindMFABaseModel):
             self.pen_data_0th_order(historic, predictor, prms)
             + self.pen_data_0th_order(historic, predictor, prms, relative=True)
             + self.pen_data_1st_order(historic, predictor, prms)
-            + self.pen_common(prms, prms_0, predictor)
+            + self.pen_common(prms, prms_0, income_weight)
+            + self.pen_local(historic, predictor, prms, income_weight)
         )
 
     def jacobian(
@@ -138,6 +148,7 @@ class StockFitter(RemindMFABaseModel):
         predictor: np.ndarray,
         prms: np.ndarray,
         prms_0: np.ndarray,
+        income_weight: float = 1.0,
     ) -> np.ndarray:
         """Derivative of the penalty function with respect to the parameters,
         used to helps scipy's optimization algorithm.
@@ -149,6 +160,7 @@ class StockFitter(RemindMFABaseModel):
               iteratively by scipy's optimization algorithm
             prms_0 (np.ndarray): initial guess for the parameters, used in the penalty to avoid
               unreasonably large deviations from the initial guess
+            income_weight (float): per-region income weight in [0,1]
 
         Returns:
             np.ndarray: penalty value for the given parameters, to be minimized in the fitting process
@@ -157,7 +169,8 @@ class StockFitter(RemindMFABaseModel):
             self.dpen_data_0th_order(historic, predictor, prms)
             + self.dpen_data_0th_order(historic, predictor, prms, relative=True)
             + self.dpen_data_1st_order(historic, predictor, prms)
-            + self.dpen_common(prms, prms_0, predictor)
+            + self.dpen_common(prms, prms_0, income_weight)
+            + self.dpen_local(historic, predictor, prms, income_weight)
         )
 
     def pen_data_0th_order(self, historic, predictor, prms, relative=False):
@@ -210,19 +223,48 @@ class StockFitter(RemindMFABaseModel):
             * self.penalty_weights["data_1st_order"]
         )
 
-    def pen_common(self, prms, prms_0, predictor):
-        return np.sum(self.norm(prms - prms_0) * self.penalty_weights["prms"] * self.gdp_weight(predictor))
+    def pen_common(self, prms, prms_0, income_weight: float):
+        """Penalty for deviation from global best-fit parameters.
+        Scaled by (1 - income_weight) so that low-income regions are anchored to the common
+        regression, while high-income regions are free to fit their local data.
+        """
+        return np.sum(self.norm(prms - prms_0) * self.penalty_weights["prms"] * (1.0 - income_weight))
 
-    def dpen_common(self, prms, prms_0, predictor):
-        """derivative of pen_common with respect to prms"""
-        return self.dnorm(prms - prms_0) * self.penalty_weights["prms"] * self.gdp_weight(predictor)
-    
-    def gdp_weight(self, predictor):
-        last_hist_predictor = self.last_hist(predictor)
-        p0 = -.3
-        a = 2
-        weight_correction = np.exp(- a * (last_hist_predictor - p0))
-        return np.array([1, weight_correction, weight_correction])
+    def dpen_common(self, prms, prms_0, income_weight: float):
+        """Derivative of pen_common with respect to prms."""
+        return self.dnorm(prms - prms_0) * self.penalty_weights["prms"] * (1.0 - income_weight)
+
+    def _gdppc_time_weights(self, predictor) -> np.ndarray:
+        """GDP proportional weights over historic time steps, derived from the normalized predictor.
+        predictor = (log10(gdppc) - mean) / 2, so 10^(predictor * 2) ∝ gdppc (mean cancels in shares).
+        Mirrors the gdppc weighting used in the global regression (but without population,
+        which is constant within a single region).
+        """
+        gdppc_proxy = 10.0 ** (predictor[:self._n_hist] * 2.0)
+        return gdppc_proxy / gdppc_proxy.sum()
+
+    def pen_local(self, historic, predictor, prms, income_weight: float):
+        """Weighted least-squares fit of the function to all regional historic data.
+        Weights are proportional to gdppc at each time step, mirroring the global regression.
+        Scaled by income_weight so that high-income regions are primarily governed by local data.
+        Together with pen_common, forms a convex combination between global and local anchoring.
+        """
+        w = self._gdppc_time_weights(predictor)
+        fits = self.extrapolation.func(predictor[:self._n_hist], prms)
+        diff = fits - historic
+        # sum(penalty_weights["prms"]) gives the total parameter-anchoring strength as a scalar
+        return 0.1 * np.sum(self.norm(diff) * w) * float(np.sum(self.penalty_weights["prms"])) * income_weight
+
+    def dpen_local(self, historic, predictor, prms, income_weight: float):
+        """Derivative of pen_local with respect to prms."""
+        w = self._gdppc_time_weights(predictor)
+        result = np.zeros(self.extrapolation.n_prms)
+        for t in range(self._n_hist):
+            fit_t = self.extrapolation.func(predictor[t], prms)
+            jac_t = self.extrapolation.jacobian(predictor[t], prms)
+            diff_t = fit_t - historic[t]
+            result += self.dnorm(diff_t) * jac_t * w[t]
+        return 0.1 * result * float(np.sum(self.penalty_weights["prms"])) * income_weight
 
     @staticmethod
     def norm(x):
