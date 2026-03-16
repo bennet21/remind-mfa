@@ -272,7 +272,7 @@ class StockExtrapolation(RemindMFABaseModel):
                 [
                     0.4,  # saturation_level
                     0.1,  # offset
-                    0.2,  # growth_rate
+                    0.4,  # growth_rate
                 ]
             ),
         }
@@ -285,11 +285,11 @@ class StockExtrapolation(RemindMFABaseModel):
                 [
                     0.2,  # saturation_level
                     0.2,  # offset
-                    10.,  # growth_rate
+                    1.,  # growth_rate
                 ]
             ),
         }
-        penalty_weights = {k: penalty_weights[k] / order_of_magnitude[k]**2 for k in penalty_weights}
+        penalty_weights = {k: penalty_weights[k] / StockFitter.norm(order_of_magnitude[k]) for k in penalty_weights}
         stock_fitter = StockFitter(
             historic_stocks_pc=self.stocks_to_fit,
             extrapolation=self.extrapolation_single_predictor,
