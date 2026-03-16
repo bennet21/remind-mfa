@@ -129,7 +129,7 @@ class StockFitter(RemindMFABaseModel):
             self.pen_data_0th_order(historic, predictor, prms)
             + self.pen_data_0th_order(historic, predictor, prms, relative=True)
             + self.pen_data_1st_order(historic, predictor, prms)
-            + self.pen_common(prms, prms_0)
+            + self.pen_common(prms, prms_0, predictor)
         )
 
     def jacobian(
@@ -157,7 +157,7 @@ class StockFitter(RemindMFABaseModel):
             self.dpen_data_0th_order(historic, predictor, prms)
             + self.dpen_data_0th_order(historic, predictor, prms, relative=True)
             + self.dpen_data_1st_order(historic, predictor, prms)
-            + self.dpen_common(prms, prms_0)
+            + self.dpen_common(prms, prms_0, predictor)
         )
 
     def pen_data_0th_order(self, historic, predictor, prms, relative=False):
@@ -210,12 +210,19 @@ class StockFitter(RemindMFABaseModel):
             * self.penalty_weights["data_1st_order"]
         )
 
-    def pen_common(self, prms, prms_0):
-        return np.sum(self.norm(prms - prms_0) * self.penalty_weights["prms"])
+    def pen_common(self, prms, prms_0, predictor):
+        return np.sum(self.norm(prms - prms_0) * self.penalty_weights["prms"] * self.gdp_weight(predictor))
 
-    def dpen_common(self, prms, prms_0):
+    def dpen_common(self, prms, prms_0, predictor):
         """derivative of pen_common with respect to prms"""
-        return self.dnorm(prms - prms_0) * self.penalty_weights["prms"]
+        return self.dnorm(prms - prms_0) * self.penalty_weights["prms"] * self.gdp_weight(predictor)
+    
+    def gdp_weight(self, predictor):
+        last_hist_predictor = self.last_hist(predictor)
+        p0 = -.3
+        a = 2
+        weight_correction = np.exp(- a * (last_hist_predictor - p0))
+        return np.array([1, weight_correction, weight_correction])
 
     @staticmethod
     def norm(x):
