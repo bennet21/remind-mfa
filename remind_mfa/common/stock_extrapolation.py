@@ -509,6 +509,435 @@ class StockExtrapolation(RemindMFABaseModel):
         blended_stock[last_history_idx:] = y_future                      # Apply blended future
 
         return blended_stock
+
+    # def critically_damped_blend(self, historical: np.ndarray, prediction: np.ndarray) -> np.ndarray:
+    #     """
+    #     Blend historical and extrapolated stock values using a simulated kinematic spring-damper.
+        
+    #     This guarantees perfect discrete C1 continuity by strictly enforcing a linear kinematic 
+    #     projection on the first time step, and only applying corrective acceleration to subsequent 
+    #     velocities. It tracks the target position and target velocity to smoothly merge over an 
+    #     open-ended horizon.
+    #     """
+    #     time = np.array(self.dims["t"].items)
+    #     last_history_idx = len(historical) - 1
+        
+    #     # 1. Preserve historical data absolutely perfectly
+    #     blended = prediction.copy()
+    #     blended[:last_history_idx + 1] = historical[:last_history_idx + 1]
+
+    #     def avg_slope(x, y, n=1):
+    #         """Calculate the average slope over the last n historical timesteps."""
+    #         ydiff = y[last_history_idx, ...] - y[last_history_idx - n, ...]
+    #         xdiff = x[last_history_idx] - x[last_history_idx - n]
+    #         return ydiff / xdiff
+
+    #     # 2. Extract initial state to ensure perfect C1 boundary
+    #     y_curr = historical[last_history_idx, ...].copy()
+    #     v_curr = avg_slope(time, historical, n=1).copy()
+
+    #     approaching_time = 80
+    #     # omega is the natural frequency of the spring (stiffness)
+    #     omega = 4.74 / approaching_time
+
+    #     # 3. Run the kinematic simulation forward
+    #     for t_idx in range(last_history_idx + 1, len(time)):
+    #         dt = time[t_idx] - time[t_idx - 1]
+            
+    #         # STEP A: Update Position
+    #         # By applying the current velocity BEFORE calculating any new forces, 
+    #         # the first step (t=1) is strictly y_hist + v_hist * dt. 
+    #         # This makes the discrete derivative mathematically identical to the historical slope.
+    #         y_curr = y_curr + v_curr * dt
+            
+    #         # STEP B: Observe the Target
+    #         target_pos = prediction[t_idx, ...]
+            
+    #         # Calculate the target's current velocity (foresight for the damper)
+    #         if t_idx < len(time) - 1:
+    #             # Central difference for smoother target tracking
+    #             target_vel = (prediction[t_idx+1, ...] - prediction[t_idx-1, ...]) / (time[t_idx+1] - time[t_idx-1])
+    #         else:
+    #             # Backward difference at the end of the array
+    #             target_vel = (prediction[t_idx, ...] - prediction[t_idx-1, ...]) / dt
+                
+    #         # STEP C: Calculate Forces
+    #         pos_error = target_pos - y_curr
+    #         vel_error = target_vel - v_curr
+            
+    #         # Critically damped acceleration formula: a = w^2 * error + 2w * vel_error
+    #         a_curr = (omega**2) * pos_error + (2 * omega) * vel_error
+            
+    #         # STEP D: Update Velocity for the next step
+    #         v_curr = v_curr + a_curr * dt
+            
+    #         # Store the seamlessly blended result
+    #         blended[t_idx, ...] = y_curr
+
+    #     return blended
+    
+    # def critically_damped_blend(self, historical: np.ndarray, prediction: np.ndarray) -> np.ndarray:
+    #     time = np.array(self.dims["t"].items)
+    #     last_history_idx = len(historical) - 1
+    #     last_history_year = time[last_history_idx]
+
+        # # Helper for derivatives
+        # def get_diff_derivative(y_hist, y_pred, x, n=5):
+        #     """
+        #     Calculates the difference in 1st and 2nd derivatives by fitting a 2nd-order 
+        #     polynomial to the last n points to filter out noise.
+        #     """
+        #     last_idx = len(y_hist) - 1
+        #     # Slice the last n points
+        #     x_clip = x[last_idx - (n-1) : last_idx + 1]
+        #     y_h_clip = y_hist[last_idx - (n-1) : last_idx + 1]
+        #     y_p_clip = y_pred[last_idx - (n-1) : last_idx + 1]
+
+        #     # Fit a 2nd order polynomial: y = ax^2 + bx + c
+        #     # polyfit returns [a, b, c]
+        #     h_params = np.polyfit(x_clip, y_h_clip, 2)
+        #     p_params = np.polyfit(x_clip, y_p_clip, 2)
+
+        #     # Derivatives of ax^2 + bx + c:
+        #     # y'  = 2ax + b
+        #     # y'' = 2a
+            
+        #     t0 = x[last_idx] # The transition time
+            
+        #     # History derivatives at t0
+        #     h_slope = 2 * h_params[0] * t0 + h_params[1]
+        #     h_accel = 2 * h_params[0]
+            
+        #     # Prediction derivatives at t0
+        #     p_slope = 2 * p_params[0] * t0 + p_params[1]
+        #     p_accel = 2 * p_params[0]
+            
+        #     return h_slope - p_slope, h_accel - p_accel
+        
+        # def get_diff_derivatives(y_h, y_p, x_vals, n1=3, n2=10):
+        #     """
+        #     Calculates differences in 1st and 2nd derivatives using polyfit.
+        #     Reshapes data to handle multi-dimensional arrays (regions, stocks, etc.)
+        #     """
+        #     orig_shape = y_h.shape[1:]
+            
+        #     def get_vals(y, n):
+        #         # Slice last n points and reshape to (n, -1) for vectorized fit
+        #         y_slice = y[last_history_idx - (n-1) : last_history_idx + 1].reshape(n, -1)
+        #         x_slice = x_vals[last_history_idx - (n-1) : last_history_idx + 1]
+                
+        #         # Use relative time (t=0 at transition) for numerical stability
+        #         t_rel = x_slice - last_history_year
+                
+        #         # Fit y = at^2 + bt + c. y'(0)=b, y''(0)=2a
+        #         coeffs = np.polyfit(t_rel, y_slice, 2)
+        #         return coeffs[1].reshape(orig_shape), (2 * coeffs[0]).reshape(orig_shape)
+
+        #     h_slope, _ = get_vals(y_h, n1)
+        #     _, h_accel = get_vals(y_h, n2)
+        #     p_slope, _ = get_vals(y_p, n1)
+        #     _, p_accel = get_vals(y_p, n2)
+            
+        #     return h_slope - p_slope, h_accel - p_accel
+
+        # # 1. Calculate the initial differences (The Error state at t=0)
+        # diff_0 = historical[last_history_idx, :] - prediction[last_history_idx, :]
+        # diff_1, diff_2 = get_diff_derivatives(historical, prediction, time, n1=2, n2=20)
+        # diff_2 = diff_2 * 0.2
+
+        # approaching_time = 80
+        # k = 4.74 / approaching_time
+
+        # # 2. Solve for constants to satisfy x(0), x'(0), and x''(0)
+        # A = diff_0
+        # B = diff_1 + k * diff_0
+        # C = 0.5 * (diff_2 + 2 * k * diff_1 + k**2 * diff_0)
+
+        # # 3. Construct time delta
+        # time_extended = time.reshape(-1, *([1] * len(diff_0.shape)))
+        # delta_t = time_extended - last_history_year
+        
+        # # We only apply the correction to the future (delta_t >= 0)
+        # # Masking ensures we don't mess with historical data points
+        # mask = (delta_t > 0)
+
+        # # 4. Analytical correction: x(t) = (A + Bt + Ct^2) * exp(-kt)
+        # correction = (A + B * delta_t + C * delta_t**2) * np.exp(-k * delta_t)
+
+        # return prediction[...] + (correction * mask)
+
+    # def _integrate_forced_damped_system(self, y0, v0, t_array, p_array, k):
+    #     """
+    #     Numerically integrates the forced critically damped oscillator:
+    #     Y'' + 2kY' + k^2Y = k^2P(t)
+    #     using the Runge-Kutta 4 (RK4) method for stability and accuracy.
+    #     """
+    #     # Initialize arrays for position (y) and velocity (v)
+    #     y = np.zeros_like(p_array, dtype=float)
+    #     v = np.zeros_like(p_array, dtype=float)
+        
+    #     # Set initial conditions
+    #     y[0] = y0
+    #     v[0] = v0
+        
+    #     for i in range(1, len(t_array)):
+    #         dt = t_array[i] - t_array[i-1]
+            
+    #         y_curr = y[i-1]
+    #         v_curr = v[i-1]
+            
+    #         # Approximate the continuous forcing function P(t) at current, next, and mid points
+    #         p_curr = p_array[i-1]
+    #         p_next = p_array[i]
+    #         p_mid = (p_curr + p_next) / 2.0
+            
+    #         # State derivatives: dy/dt = v,  dv/dt = k^2 * P(t) - 2k*v - k^2*y
+    #         def derivatives(y_val, v_val, p_val):
+    #             dy = v_val
+    #             dv = (k**2) * p_val - (2 * k) * v_val - (k**2) * y_val
+    #             return dy, dv
+                
+    #         # RK4 steps
+    #         k1_y, k1_v = derivatives(y_curr, v_curr, p_curr)
+    #         k2_y, k2_v = derivatives(y_curr + 0.5 * dt * k1_y, v_curr + 0.5 * dt * k1_v, p_mid)
+    #         k3_y, k3_v = derivatives(y_curr + 0.5 * dt * k2_y, v_curr + 0.5 * dt * k2_v, p_mid)
+    #         k4_y, k4_v = derivatives(y_curr + dt * k3_y, v_curr + dt * k3_v, p_next)
+            
+    #         # Update state
+    #         y[i] = y_curr + (dt / 6.0) * (k1_y + 2*k2_y + 2*k3_y + k4_y)
+    #         v[i] = v_curr + (dt / 6.0) * (k1_v + 2*k2_v + 2*k3_v + k4_v)
+            
+    #     return y
+    
+    # def _integrate_forced_damped_system(self, y0, v0, t_array, p_array, k):
+    #     """
+    #     Numerically integrates using the Forward Euler method:
+    #     Y'' + 2kY' + k^2Y = k^2P(t) + 
+    #     """
+    #     y = np.zeros_like(p_array, dtype=float)
+    #     v = np.zeros_like(p_array, dtype=float)
+        
+    #     y[0] = y0
+    #     v[0] = v0
+        
+    #     for i in range(1, len(t_array)):
+    #         dt = t_array[i] - t_array[i-1]
+            
+    #         # Current state
+    #         y_curr = y[i-1]
+    #         v_curr = v[i-1]
+            
+    #         p_curr = p_array[i-1]
+            
+    #         # Current derivatives
+    #         dy_dt = v_curr
+    #         # dv_dt = (k**2) * p_curr - (2 * k) * v_curr - (k**2) * y_curr
+
+    #         vp_curr = (p_array[i] - p_array[i-1]) / dt 
+    #         dv_dt = (k**2) * p_curr - (2 * k) * (v_curr-vp_curr) - (k**2) * y_curr
+            
+    #         # Step forward linearly
+    #         y[i] = y_curr + dy_dt * dt
+    #         v[i] = v_curr + dv_dt * dt
+            
+    #     return y
+    
+    # def _integrate_forced_damped_system_fixed(self, y0, v0, t_array, p_array, k):
+    #     y = np.zeros_like(p_array, dtype=float)
+    #     v = np.zeros_like(p_array, dtype=float)
+    #     y[0] = y0
+    #     v[0] = v0
+        
+    #     # Pre-calculate the slope of the prediction P'(t)
+    #     # We use gradient for a stable estimate of the 'target velocity'
+    #     p_slope = np.gradient(p_array, t_array, axis=0)
+        
+    #     for i in range(1, len(t_array)):
+    #         dt = t_array[i] - t_array[i-1]
+            
+    #         y_curr, v_curr = y[i-1], v[i-1]
+    #         p_curr, ps_curr = p_array[i-1], p_slope[i-1]
+    #         p_next, ps_next = p_array[i], p_slope[i]
+            
+    #         # Midpoint estimates for RK4
+    #         p_mid = (p_curr + p_next) / 2.0
+    #         ps_mid = (ps_curr + ps_next) / 2.0
+            
+    #         def derivatives(y_val, v_val, p_val, ps_val):
+    #             dy = v_val
+    #             # The Magic: k^2*P + 2*k*P' cancels the damping lag!
+    #             dv = (k**2 * p_val + 2 * k * ps_val) - (2 * k * v_val) - (k**2 * y_val)
+    #             return dy, dv
+                
+    #         k1_y, k1_v = derivatives(y_curr, v_curr, p_curr, ps_curr)
+    #         k2_y, k2_v = derivatives(y_curr + 0.5*dt*k1_y, v_curr + 0.5*dt*k1_v, p_mid, ps_mid)
+    #         k3_y, k3_v = derivatives(y_curr + 0.5*dt*k2_y, v_curr + 0.5*dt*k2_v, p_mid, ps_mid)
+    #         k4_y, k4_v = derivatives(y_curr + dt*k3_y, v_curr + dt*k3_v, p_next, ps_next)
+            
+    #         y[i] = y_curr + (dt / 6.0) * (k1_y + 2*k2_y + 2*k3_y + k4_y)
+    #         v[i] = v_curr + (dt / 6.0) * (k1_v + 2*k2_v + 2*k3_v + k4_v)
+            
+    #     return y
+
+    # def _integrate_forced_damped_system(self, y0, v0, t_array, p_array, k):
+    #     """
+    #     Numerically integrates the forced critically damped system:
+    #     Y'' + 2kY' + k^2Y = k^2P(t) + 2kP'(t)
+    #     """
+    #     # Initialize output arrays matching the shape of the prediction array
+    #     y = np.zeros_like(p_array, dtype=float)
+    #     v = np.zeros_like(p_array, dtype=float)
+        
+    #     # Initialize running state variables
+    #     y_curr = y0.copy()
+    #     v_curr = v0.copy()
+        
+    #     # Set initial conditions
+    #     y[0, ...] = y_curr
+    #     v[0, ...] = v_curr
+        
+    #     for i in range(1, len(t_array)):
+    #         dt = t_array[i] - t_array[i-1]
+            
+    #         # --- 1. Semi-Implicit Euler (Step A: Update Position) ---
+    #         y_curr = y_curr + v_curr * dt
+            
+    #         # --- 2. Central Difference (Foresight for Target Velocity) ---
+    #         p_curr = p_array[i, ...]
+            
+    #         if i < len(t_array) - 1:
+    #             # Look ahead (i+1) and behind (i-1) to calculate the macro-trend slope
+    #             dt_center = t_array[i+1] - t_array[i-1]
+    #             vp_curr = (p_array[i+1, ...] - p_array[i-1, ...]) / dt_center
+    #         else:
+    #             # Fallback to backward difference for the very last timestep
+    #             vp_curr = (p_array[i, ...] - p_array[i-1, ...]) / dt
+                
+    #         # --- 3. Calculate Forces at updated position ---
+    #         # Using the rearranged ODE: Y'' = k^2(P - Y) + 2k(P' - Y')
+    #         dv_dt = (k**2) * (p_curr - y_curr) + (2 * k) * (vp_curr - v_curr)
+            
+    #         # --- 4. Semi-Implicit Euler (Step B: Update Velocity) ---
+    #         v_curr = v_curr + dv_dt * dt
+            
+    #         # Store the state for this timestep
+    #         y[i, ...] = y_curr
+    #         v[i, ...] = v_curr
+            
+    #     return y
+    
+    # def _integrate_forced_damped_system(self, y0, v0, a0, t_array, p_array, k):
+    #     """
+    #     Numerically integrates the 3rd-order forced critically damped system:
+    #     Y''' + 3kY'' + 3k^2Y' + k^3Y = k^3P + 3k^2P' + 3kP''
+        
+    #     This guarantees C2 continuity by tracking position, velocity, AND acceleration.
+    #     """
+    #     # Initialize output arrays
+    #     y = np.zeros_like(p_array, dtype=float)
+    #     v = np.zeros_like(p_array, dtype=float)
+    #     a = np.zeros_like(p_array, dtype=float)
+        
+    #     # State variables
+    #     y_curr = y0.copy()
+    #     v_curr = v0.copy()
+    #     a_curr = a0.copy()
+        
+    #     y[0, ...] = y_curr
+    #     v[0, ...] = v_curr
+    #     a[0, ...] = a_curr
+        
+    #     for i in range(1, len(t_array)):
+    #         dt = t_array[i] - t_array[i-1]
+            
+    #         # --- 1. Semi-Implicit Euler Cascade (Step A & B) ---
+    #         # Update position using old velocity, update velocity using old acceleration.
+    #         # This locks in the C1 and C2 boundary conditions flawlessly at t=1.
+    #         y_curr = y_curr + v_curr * dt
+    #         v_curr = v_curr + a_curr * dt
+            
+    #         # --- 2. Central Difference Foresight (1st & 2nd Target Derivatives) ---
+    #         p_curr = p_array[i, ...]
+            
+    #         if i < len(t_array) - 1:
+    #             # 1st Derivative (Velocity Foresight)
+    #             dt_center = t_array[i+1] - t_array[i-1]
+    #             vp_curr = (p_array[i+1, ...] - p_array[i-1, ...]) / dt_center
+                
+    #             # 2nd Derivative (Acceleration Foresight)
+    #             # Standard central difference for 2nd derivative: (f(x+h) - 2f(x) + f(x-h)) / h^2
+    #             dt_avg = dt_center / 2.0
+    #             ap_curr = (p_array[i+1, ...] - 2 * p_curr + p_array[i-1, ...]) / (dt_avg**2)
+    #         else:
+    #             # Fallbacks for the very last timestep
+    #             vp_curr = (p_curr - p_array[i-1, ...]) / dt
+    #             ap_curr = np.zeros_like(p_curr) # Assume no sudden acceleration at the exact end
+                
+    #         # --- 3. Calculate Forces (Jerk / 3rd Derivative) ---
+    #         # Y''' = k^3(P - Y) + 3k^2(P' - Y') + 3k(P'' - Y'')
+    #         da_dt = (k**3) * (p_curr - y_curr) + \
+    #                 (3 * k**2) * (vp_curr - v_curr) + \
+    #                 (3 * k) * (ap_curr - a_curr)
+            
+    #         # --- 4. Semi-Implicit Euler (Step C) ---
+    #         a_curr = a_curr + da_dt * dt
+            
+    #         # Store the state
+    #         y[i, ...] = y_curr
+    #         v[i, ...] = v_curr
+    #         a[i, ...] = a_curr
+            
+    #     return y
+
+
+    # def critically_damped_blend(self, historical: np.ndarray, prediction: np.ndarray) -> np.ndarray:
+    #     """
+    #     Blend historical and extrapolated stock values using a forced critically damped 
+    #     system approach to ensure a smooth transition.
+        
+    #     We solve the ODE: Y'' + 2kY' + k^2Y = k^2P(t)
+    #     where Y is the blended curve and P is the pure prediction.
+    #     """
+    #     time = np.array(self.dims["t"].items)
+    #     last_history_idx = len(historical) - 1
+
+    #     def avg_slope(x, y, n=1):
+    #         """Assuming time is the first dimension, calculate the average slope over the last n historical timesteps."""
+    #         ydiff = y[last_history_idx, :] - y[last_history_idx - n, :]
+    #         xdiff = x[last_history_idx] - x[last_history_idx - n]
+    #         return ydiff / xdiff
+
+    #     approaching_time = 50
+    #     add_assumption_doc(
+    #         type="integer number",
+    #         name="years for blending to regression",
+    #         value=approaching_time,
+    #         description=(
+    #             "Number of years for the blending from historical to regressed in-use stocks. "
+    #             "Governs the damping parameter k."
+    #         ),
+    #     )
+
+    #     k = 4.74 / approaching_time
+
+    #     # 1. Isolate the time window and prediction values we need to integrate over
+    #     t_future = time[last_history_idx:]
+    #     p_future = prediction[last_history_idx:]
+
+    #     # 2. Set the absolute initial conditions at the transition point
+    #     y0 = historical[last_history_idx, :]
+    #     v0 = avg_slope(time, historical, n=1)
+
+    #     # 3. Integrate to find the blended future path Y(t)
+    #     y_future = self._integrate_forced_damped_system(y0, v0, t_future, p_future, k)
+
+    #     # 4. Construct the final contiguous array
+    #     blended_stock = prediction.copy()
+    #     blended_stock[:last_history_idx] = historical[:last_history_idx] # Preserve exact history
+    #     blended_stock[last_history_idx:] = y_future                      # Apply blended future
+
+    #     return blended_stock
+
     @property
     def dims_out(self):
         return self.dims[self.target_dim_letters]
