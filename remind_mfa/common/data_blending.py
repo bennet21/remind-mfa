@@ -192,7 +192,7 @@ class CriticallyDampedBlender:
         """
         last_history_idx = len(self.historical) - 1
 
-        approaching_time = 50
+        approaching_time = 1
         add_assumption_doc(
             type="integer number",
             name="years for blending to regression",

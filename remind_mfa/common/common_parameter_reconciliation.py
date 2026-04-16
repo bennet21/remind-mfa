@@ -18,9 +18,11 @@ class CommonParameterReconciliation:
     def __init__(self,
                  ref_mfa: CommonMFASystem,
                  uncoupled: bool = False,
+                 cumulative_log_corrections: Optional[dict] = None,
                 ):
         
         self.ref_mfa = ref_mfa
+        self._cumulative_log_corrections = cumulative_log_corrections or {}
         
         self._year_of_reconciliation = 2023
         self._reduced_stock_type = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
@@ -284,6 +286,11 @@ class CommonParameterReconciliation:
             S_weighted = S * var_vec[np.newaxis, :]
             A += S_weighted @ S.T
 
+        # adjust b for prior drift from previous iterations
+        for prm_name, D_prev in self._cumulative_log_corrections.items():
+            if prm_name in self.S_matrices:
+                b -= self.S_matrices[prm_name] @ self.flatten_fd_to_np(D_prev)
+
         # solve for lambda
         self.lmda = np.linalg.solve(A, b)
 
@@ -343,10 +350,18 @@ class CommonParameterReconciliation:
 
     def calc_corrections(self):
         self.correction_factors = {}
+        self.cumulative_log_corrections = {}
         # TODO self.S_matrices.keys() replace this with list of corrected parameters
         for prm_name in self.S_matrices.keys():
             log_correction = self.calc_log_correction(prm_name)
-            self.correction_factors[prm_name] = log_correction.apply(np.exp)
+            # store total log-correction from original params for the next iteration
+            self.cumulative_log_corrections[prm_name] = log_correction
+            D_prev = self._cumulative_log_corrections.get(prm_name)
+            if D_prev is not None:
+                incremental_log_correction = log_correction - D_prev
+            else:
+                incremental_log_correction = log_correction
+            self.correction_factors[prm_name] = incremental_log_correction.apply(np.exp)
 
     def calc_log_correction(self, prm_name: str) -> fd.FlodymArray:
         S = self.S_matrices[prm_name]

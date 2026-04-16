@@ -81,8 +81,9 @@ class CommonModel:
             return
         
         # TODO make the number of iterations more transparent.
-        n_iter = 1
+        n_iter = 5
         logging.info("Starting parameter reconciliation...")
+        cumulative_log_corrections = {}
         for i in range(n_iter):
             logging.info(f"Parameter reconciliation iteration {i + 1}/{n_iter}")
             ref_mfa = self.HistoricMFASystemCls(
@@ -97,9 +98,11 @@ class CommonModel:
 
             self.parameter_reconciliation = self.ParameterReconciliationCls(
                 ref_mfa=ref_mfa,
-                uncoupled=True
+                uncoupled=True,
+                cumulative_log_corrections=cumulative_log_corrections,
             )
             self.parameters = self.parameter_reconciliation.correct_parameters()
+            cumulative_log_corrections = self.parameter_reconciliation.cumulative_log_corrections
 
         # recalculate historic MFA
         self.historic_mfa = self.make_mfa(historic=True)
