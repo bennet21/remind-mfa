@@ -7,6 +7,7 @@ import math
 import random
 from copy import deepcopy
 from abc import abstractmethod
+from scipy.optimize import minimize
 
 from remind_mfa.common.common_mfa_system import CommonMFASystem
 
@@ -43,15 +44,24 @@ class CommonParameterReconciliation:
         self.prepare_trds()
 
     def prepare_dims(self):
-        """If not overwritten in subclass, leave dimensions as is."""
-        pass
+        """Subclass should call super().prepare_dims() at the beginning.
+        Any further dimension adjustments to be implemented in subclass."""
+        # TODO Can I replace deepcopy with flodym-implemented copy method?
+        self.input_dims = deepcopy(self.ref_mfa.dims)
+        self.dims = deepcopy(self.input_dims)
 
     def prepare_prms(self):
-        """If not overwritten in subclass, leave parameters as is."""
-        pass
+        """Subclass should call super().prepare_prms() at the beginning.
+        Any further parameter adjustments to be implemented in subclass."""
+        self.input_prms = deepcopy(self.ref_mfa.parameters)
+        # TODO describe what prms is
+        self.prms: dict[str, fd.Parameter] = {}
+        # TODO describe what prms_adj_dims is
+        self.prms_adj_dims: dict[str, fd.DimensionSet] = {}
 
     def prepare_flws(self):
         """If not overwritten in subclass, leave flows as is."""
+        # TODO can subclasses also use super here?
         self.flws = deepcopy(self.ref_mfa.flows)
 
     def prepare_stks(self):
@@ -87,10 +97,11 @@ class CommonParameterReconciliation:
         cumulative_corrections: dict[str, fd.FlodymArray] = {}
 
         for i in range(max_iter):
-            self.td = self.calc_top_down_stock(self.prms).copy()
-            self.bu = self.calc_bottom_up_stock(self.prms).copy()
+            # TODO use updated self.prms here
+            self.td_curr = self.calc_top_down_stock(self.prms).copy()
+            self.bu_curr = self.calc_bottom_up_stock(self.prms).copy()
 
-            mismatch = float(np.max(np.abs(np.log(self.td.values / self.bu.values))))
+            mismatch = float(np.max(np.abs(np.log(self.td_curr.values / self.bu_curr.values))))
             logging.info(f"Reconciliation iteration {i + 1}/{max_iter}: max |log(td/bu)| = {mismatch:.4f}")
 
             if tol is not None and mismatch < tol:
@@ -98,11 +109,11 @@ class CommonParameterReconciliation:
                 break
 
             # Fresh sensitivity matrices each iteration (re-linearise around current prms)
-            self.S_matrices = {}
-            self.pre_compute_sensitivity(self.calc_top_down_stock, self.td)
-            self.pre_compute_sensitivity(self.calc_bottom_up_stock, self.bu, denominator=True)
+            self.pre_compute_sensitivity(self.calc_top_down_stock, self.td_curr, init_new=True)
+            self.pre_compute_sensitivity(self.calc_bottom_up_stock, self.bu_curr, denominator=True)
 
             self.pre_compute_lambda()
+            # TODO one could also calc log corrections here, add them up and then appluy exp(sum)
             self.calc_corrections()
 
             for prm_name, c in self.correction_factors.items():
@@ -123,6 +134,96 @@ class CommonParameterReconciliation:
                 values=self.output_prms[prm_name].values,
             )
         return self.output_prms
+    
+    def correct_parameters_scipy(self, max_iter: int = 1, tol: Optional[float] = None):
+        """Reconcile top-down and bottom-up stocks via scipy.optimize.minimize (SLSQP).
+
+        Minimises the weighted sum of squared log-corrections subject to the equality
+        constraint log(td(prm)) = log(bu(prm)).  Parameters with zero relative standard
+        deviation are pinned (no correction) via bounds.
+        """
+        param_names = list(self.prms_adj_dims.keys())
+
+        # Map each parameter to its slice in the flat x vector (log-corrections)
+        param_slices: dict[str, slice] = {}
+        offset = 0
+        for prm_name in param_names:
+            size = self.prms_adj_dims[prm_name].total_size
+            param_slices[prm_name] = slice(offset, offset + size)
+            offset += size
+
+        x0 = np.zeros(offset)
+
+        # Variance vector; zero entries → parameter is fixed via bounds
+        sigma = np.concatenate([self.get_sigma(prm_name) for prm_name in param_names])
+        bounds = [(0.0, 0.0) if s == 0 else (None, None) for s in sigma]
+        free = sigma != 0  # mask for free (correctable) entries
+
+        def prms_from_x(x: np.ndarray) -> dict:
+            prms = {prm_name: fd.FlodymArray.full_like(self.prms[prm_name], fill_value=0.) for prm_name in param_names}
+            for prm_name in param_names:
+                log_corr = self.reshape_np_to_fd(x[param_slices[prm_name]], self.prms_adj_dims[prm_name])
+                prms[prm_name] = self.prms[prm_name] * log_corr.apply(np.exp)
+            return prms
+
+        def objective(x: np.ndarray) -> float:
+            return float(np.sum(np.where(free, x ** 2 / sigma, 0.0)))
+
+        def objective_jac(x: np.ndarray) -> np.ndarray:
+            return np.where(free, 2.0 * x / sigma, 0.0)
+
+        def constraint_eq(x: np.ndarray) -> np.ndarray:
+            prms = prms_from_x(x)
+            td = self.calc_top_down_stock(prms)
+            bu = self.calc_bottom_up_stock(prms)
+            return self.flatten_fd_to_np(td.apply(np.log) - bu.apply(np.log))
+
+        # Precompute constraint Jacobian d(log td - log bu)/dx at x0 (linearised).
+        # Force the full (non-block-diagonal) computation so cross-sensitivities are captured.
+        saved_independent = self.output_dims_are_independent
+        self.output_dims_are_independent = False
+        td0 = self.calc_top_down_stock(self.prms)
+        bu0 = self.calc_bottom_up_stock(self.prms)
+        self.pre_compute_sensitivity(self.calc_top_down_stock, td0, init_new=True)
+        self.pre_compute_sensitivity(self.calc_bottom_up_stock, bu0, denominator=True)
+        self.output_dims_are_independent = saved_independent
+
+        n_outputs = self.flatten_fd_to_np(td0).size
+        # constraint_jac_matrix = np.hstack([
+        #     self.S_matrices.get(prm_name, np.zeros((n_outputs, self.prms_adj_dims[prm_name].total_size)))
+        #     for prm_name in param_names
+        # ])
+
+        result = minimize(
+            fun=objective,
+            x0=x0,
+            method='SLSQP',
+            jac=objective_jac,
+            constraints={'type': 'eq', 'fun': constraint_eq},
+            bounds=bounds,
+            options={'maxiter': max_iter, 'ftol': tol if tol is not None else 1e-6, 'disp': True},
+            # https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html#optimize-minimize-slsqp
+        )
+
+        if not result.success:
+            logging.warning("scipy minimize did not converge: %s", result.message)
+
+        # Apply optimal corrections — mirrors post-processing of the iterative method
+        self.output_prms = deepcopy(self.input_prms)
+        for prm_name in param_names:
+            log_corr = self.reshape_np_to_fd(result.x[param_slices[prm_name]], self.prms_adj_dims[prm_name])
+            c = log_corr.apply(np.exp)
+            c_full = self.cast_correction_to_original_prm_dim(c)
+            self.output_prms[prm_name][...] = self.input_prms[prm_name] * c_full
+            self.normalize_parameter(prm_name)
+            self.output_prms[prm_name] = fd.Parameter(
+                name=self.output_prms[prm_name].name,
+                dims=self.output_prms[prm_name].dims,
+                values=self.output_prms[prm_name].values,
+            )
+
+        return self.output_prms
+
 
     @abstractmethod
     def calc_top_down_stock(self, prm: dict[str, fd.FlodymArray]) -> fd.FlodymArray:
@@ -132,15 +233,21 @@ class CommonParameterReconciliation:
     def calc_bottom_up_stock(self, prm: dict[str, fd.FlodymArray]) -> fd.FlodymArray:
         pass
 
-    def pre_compute_sensitivity(self, f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray], f0: fd.FlodymArray, denominator: bool = False):
+    def pre_compute_sensitivity(
+        self,
+        f: Callable[[dict[str, fd.FlodymArray]], fd.FlodymArray],
+        f0: fd.FlodymArray,
+        denominator: bool = False,
+        init_new: bool = False,
+        ):
         """
         Pre-compute sensitivity matrices for parameters used in the given model function.
         Pre-existing sensitivities are added to newly computed ones.
         """
         relevant_params = self.get_relevant_parameters(f, self.prms)
 
-        # Initialize S_matrices dictionary if it doesn't exist
-        if not hasattr(self, "S_matrices"):
+        # Initialize S_matrices dictionary if requested
+        if init_new:
             self.S_matrices = {}
 
         for prm_name in relevant_params:
@@ -302,7 +409,7 @@ class CommonParameterReconciliation:
 
     def pre_compute_lambda(self):
         """Solve Aλ = b for λ."""
-        b = self.flatten_fd_to_np(self.td.apply(np.log) - self.bu.apply(np.log))
+        b = self.flatten_fd_to_np(self.td_curr.apply(np.log) - self.bu_curr.apply(np.log))
         D = b.size
         A = np.zeros((D, D))
 

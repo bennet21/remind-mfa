@@ -105,7 +105,7 @@ class CommonModel:
             ref_mfa=ref_mfa,
             uncoupled=True,
         )
-        self.parameters = self.parameter_reconciliation.correct_parameters(
+        self.parameters = self.parameter_reconciliation.correct_parameters_scipy(
             max_iter=max_iter, tol=tol
         )
 

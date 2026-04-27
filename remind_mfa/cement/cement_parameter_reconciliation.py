@@ -8,16 +8,14 @@ from remind_mfa.cement.cement_mfa_system_historic import InflowDrivenHistoricCem
 class CementParameterReconciliation(CommonParameterReconciliation):
     
     def prepare_dims(self):
-        dims = self.ref_mfa.dims
-        self.input_dims = deepcopy(dims)
-        self.dims = dims.replace('s', self._reduced_stock_type)
+        super().prepare_dims()
+        self.dims = self.dims.replace('s', self._reduced_stock_type)
 
     def prepare_prms(self):
-        prms = self.ref_mfa.parameters
-        self.input_prms = deepcopy(prms)
+        super().prepare_prms()
         self.prms: dict[str, fd.Parameter] = {}
         self.prms_adj_dims: dict[str, fd.DimensionSet] = {}
-        for key, val in prms.items():
+        for key, val in self.input_prms.items():
             # reduce stock type dimension
             if "s" in val.dims.letters:
                 val = val[{"s": self._reduced_stock_type}]
