@@ -249,4 +249,9 @@ def get_cement_definition(cfg: CementCfg, historic: bool) -> RemindMFADefinition
     )
 
 
-scenario_parameters = []
+scenario_parameters = [
+    RemindMFAParameterDefinition(name="floorspace", dim_letters=("r",),),
+    RemindMFAParameterDefinition(name="floorspace_year", dim_letters=("r",),),
+    RemindMFAParameterDefinition(name="concrete_building_mi", dim_letters=(),),
+    RemindMFAParameterDefinition(name="concrete_building_mi_year", dim_letters=(),),
+]

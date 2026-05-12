@@ -21,6 +21,8 @@ model_switches:
     clinker_ratio: 'ConstantExtrapolation'
     lifetime_mean: 'ConstantExtrapolation'
     lifetime_std: 'ConstantExtrapolation'
+    floorspace: "SmoothScalingExtrapolation"
+    concrete_building_mi: "SmoothScalingExtrapolation"
 
 visualization:
   do_visualize: True
