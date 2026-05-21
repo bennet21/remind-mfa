@@ -181,20 +181,16 @@ class CriticallyDampedBlender:
 
         The transition is modeled as a dynamic critically damped spring-damper system:
 
-            Y'' + 2k(t)Y' + k(t)²Y = k(t)²P(t) + 2k(t)P'(t)
+            Y'' + 2kY' + k²Y = k²P(t) + 2kP'(t)
 
-        where Y is the blended trajectory, P the extrapolation target, and k(t) a
-        time-varying damping parameter that starts at ``k = 4.74 / approaching_time``
-        and grows quadratically (reaching 2k₀ at ``approaching_time`` years and continuing beyond), ensuring progressively faster
-        convergence to the prediction. The ODE is solved using a semi-implicit Euler
-        method with an anticipatory D-term to prevent overshoot. The system remains
-        critically damped at all times.
+        where Y is the blended trajectory, P the extrapolation target, and
+        k = 4.74 / approaching_time. The ODE is solved using a semi-implicit Euler
+        method with an anticipatory D-term to prevent overshoot.
 
         Args:
-            approaching_time (float): Characteristic timescale in years. Sets the initial
-                damping parameter ``k₀ = 4.74 / approaching_time`` and the timescale over
-                which k doubles: ``k(t) = k₀ · (1 + (Δt / approaching_time)²)``.
-                Defaults to 50.
+            approaching_time (float): Characteristic timescale in years. Sets the damping
+                parameter ``k = 4.74 / approaching_time``, giving 95% step-response
+                convergence within ``approaching_time`` years. Defaults to 50.
 
         Returns:
             np.ndarray: Stock array with exact historical values preserved up to the last
@@ -239,17 +235,13 @@ class CriticallyDampedBlender:
     ) -> np.ndarray:
         """
         Integrate a trajectory from an initial state (y0, v0) that smoothly tracks a target
-        prediction p_array using a critically damped PD-controller with a time-varying k.
+        prediction p_array using a critically damped PD-controller.
 
         The controller drives Y toward P via:
-            Y'' + 2k(t)·Y' + k(t)²Y = k(t)²P(t) + 2k(t)·P'(t)
-        integrated with a semi-implicit Euler method, where:
-            k(t) = k₀ · (1 + (Δt / approaching_time)²),  k₀ = 4.74 / approaching_time
-
-        k grows quadratically, reaching 2k₀ at ``Δt = approaching_time`` and continuing beyond. The system
-        remains critically damped at all times. To avoid overshoot during saturation phases,
-        P'(t) is estimated using a look-ahead index that decreases from 5 to 1 over the first
-        half of ``approaching_time``, then stays at 1.
+            Y'' + 2k·Y' + k²Y = k²P(t) + 2k·P'(t),   k = 4.74 / approaching_time
+        integrated with a semi-implicit Euler method. P'(t) is estimated with a look-ahead
+        to prevent overshoot during saturation phases. A quadratic nudge applied after each
+        step guarantees convergence to P over the long run.
 
         Args:
             y0 (np.ndarray): Initial position at the transition point. Shape ``(spatial...)``.
@@ -257,9 +249,8 @@ class CriticallyDampedBlender:
             t_array (np.ndarray): 1D array of time values starting at the transition point.
             p_array (np.ndarray): Target prediction array with time as the first axis,
                 shape ``(len(t_array), spatial...)``. Must be uniformly spaced in time.
-            approaching_time (float): Characteristic timescale in years. Sets the initial
-                damping parameter ``k₀ = 4.74 / approaching_time`` and the timescale over
-                at which k reaches 2k₀ (and continues growing).
+            approaching_time (float): Characteristic timescale in years. Sets the damping
+                parameter ``k = 4.74 / approaching_time``.
 
         Returns:
             np.ndarray: Integrated trajectory array of shape ``(len(t_array), spatial...)``.
@@ -267,14 +258,16 @@ class CriticallyDampedBlender:
         n_steps = len(t_array)
         dt = t_array[1] - t_array[0]
 
-        # --- Precompute time-varying k ---
+        # --- Precompute k and nudge schedule ---
         # 4.74 is the solution to (1+x)*exp(-x) = 0.05: the critically damped step response
-        # So this means 95% convergence within approaching_time years, if k = k0.
-        k0 = 4.74 / approaching_time
-        # k grows quadratically up to a maximum value.
+        # Y(t) = 1 - (1 + k*t)*exp(-k*t) reaches 95% of its target when k*t = 4.74.
+        # So k = 4.74 / approaching_time means 95% convergence within approaching_time years.
+        k = 4.74 / approaching_time
+        # Nudge alpha grows quadratically from 0 to 1 over nudge_timescale, guaranteeing
+        # convergence to P regardless of how strongly P is growing.
+        nudge_timescale = 10 * approaching_time
         dt_elapsed = t_array - t_array[0]
-        k_arr = k0 * (1 + (dt_elapsed / approaching_time) ** 2)
-        k_arr = np.minimum(k_arr, 0.3)
+        nudge_arr = np.minimum(1.0, (dt_elapsed / nudge_timescale) ** 2)
 
         # --- Precompute look-ahead predictor velocity for each timestep ---
         vp_array = self._lookahead_velocity(p_array, dt, n_steps, approaching_time)
@@ -287,12 +280,15 @@ class CriticallyDampedBlender:
 
         # --- Integrate ---
         for i in range(1, n_steps):
-            k = k_arr[i]
             # 1. Compute acceleration
             dv_dt = k**2 * (p_array[i] - y_curr) + 2 * k * (vp_array[i] - v_curr)
             # 2. Update velocity and position
             v_curr = v_curr + dv_dt * dt
             y_curr = y_curr + v_curr * dt
+            # 3. Nudge y toward p by the current alpha
+            y_curr = (1 - nudge_arr[i]) * y_curr + nudge_arr[i] * p_array[i]
+            # 4. Re-sync velocity to the nudge-corrected position so the D-term stays consistent
+            v_curr = (y_curr - y[i - 1]) / dt
             # Store results
             y[i], v[i] = y_curr, v_curr
 
