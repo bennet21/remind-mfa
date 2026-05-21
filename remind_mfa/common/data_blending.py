@@ -277,22 +277,7 @@ class CriticallyDampedBlender:
         k_arr = np.minimum(k_arr, 0.3)
 
         # --- Precompute look-ahead predictor velocity for each timestep ---
-        # Using P'(t + n_fwd*dt) [fwd = forward] instead of P'(t) anticipates
-        # future behavior of P (e.g. saturation), preventing the controller from
-        # overshooting. n_fwd decreases linearly from n_fwd_max to 1 over the first
-        # n_ramp_steps, then remains 1 for the rest of the integration.
-        n_fwd_max = 5
-        n_ramp_steps = max(1, int((approaching_time / 2) / dt))
-        n_fwd = np.maximum(
-            1, np.round(n_fwd_max * np.maximum(0.0, 1 - np.arange(n_steps) / n_ramp_steps))
-        ).astype(int)
-        # now, use n_fwd to construct index for p velocity
-        lookahead_idx = np.minimum(np.arange(n_steps) + n_fwd - 1, n_steps - 2)
-        vp_array = (p_array[lookahead_idx + 1] - p_array[lookahead_idx]) / dt
-        
-        # Fix boundary case where the last point cannot look ahead
-        if n_steps > 2:
-            vp_array[-1] = 2 * vp_array[-2] - vp_array[-3]
+        vp_array = self._lookahead_velocity(p_array, dt, n_steps, approaching_time)
 
         # --- Initialize state ---
         y = np.zeros_like(p_array, dtype=float)
@@ -312,6 +297,41 @@ class CriticallyDampedBlender:
             y[i], v[i] = y_curr, v_curr
 
         return y
+
+    def _lookahead_velocity(
+        self,
+        p_array: np.ndarray,
+        dt: float,
+        n_steps: int,
+        approaching_time: float,
+    ) -> np.ndarray:
+        """
+        Estimate P'(t + n_fwd(t)*dt) for each timestep — the slope of the prediction
+        looked up n_fwd steps ahead. This anticipates future changes in P (e.g. saturation),
+        allowing the D-term of the controller to begin reacting before P actually flattens,
+        preventing overshoot.
+
+        n_fwd ramps continuously from n_fwd_max down to 0 over the first half of
+        approaching_time, then stays at 0 (plain local slope). The continuous ramp avoids
+        the discrete jumps that arise from integer look-ahead steps.
+        """
+        n_fwd_max = 5
+        n_ramp_steps = max(1, int((approaching_time / 2) / dt))
+
+        # Continuous look-ahead amount for each step: 5 → 0 over n_ramp_steps, then 0
+        n_fwd_cont = n_fwd_max * np.maximum(0.0, 1.0 - np.arange(n_steps) / n_ramp_steps)
+
+        # Slope of p at every step (central differences; second-order one-sided at boundaries)
+        vp_raw = np.gradient(p_array, dt, axis=0)
+
+        # For each step i, look n_fwd_cont[i] steps forward in the slope array
+        look_pos = np.clip(np.arange(n_steps, dtype=float) + n_fwd_cont, 0, n_steps - 1)
+
+        # Fractional interpolation between the two bracketing integer positions
+        lo = look_pos.astype(int)
+        hi = np.minimum(lo + 1, n_steps - 1)
+        w = (look_pos - lo).reshape((-1,) + (1,) * (p_array.ndim - 1))  # broadcast over spatial dims
+        return (1 - w) * vp_raw[lo] + w * vp_raw[hi]
 
     def _lifetime_dependent_n(
         self,
