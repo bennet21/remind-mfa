@@ -174,7 +174,6 @@ class CriticallyDampedBlender:
     def blend(
         self,
         approaching_time: float = 50,
-        ensured_convergence_time: Optional[float] = None,
     ) -> np.ndarray:
         """
         Blend historical and extrapolated values using a forced critically damped system
@@ -182,21 +181,20 @@ class CriticallyDampedBlender:
 
         The transition is modeled as a dynamic critically damped spring-damper system:
 
-            Y'' + 2kY' + k²Y = k²P(t) + 2kP'(t)
+            Y'' + 2k(t)Y' + k(t)²Y = k(t)²P(t) + 2k(t)P'(t)
 
-        where Y is the blended trajectory, P the extrapolation target, and k the damping
-        parameter derived from ``approaching_time``. The ODE is solved using a semi-implicit
-        Euler method. To prevent overshooting and eliminate steady-state tracking errors,
-        the system combines an anticipatory D-term with a long-term quintic alpha-blend.
-        Internal state (velocity) is re-synchronized at each step after blending.
+        where Y is the blended trajectory, P the extrapolation target, and k(t) a
+        time-varying damping parameter that starts at ``k = 4.74 / approaching_time``
+        and grows quadratically (reaching 2k₀ at ``approaching_time`` years and continuing beyond), ensuring progressively faster
+        convergence to the prediction. The ODE is solved using a semi-implicit Euler
+        method with an anticipatory D-term to prevent overshoot. The system remains
+        critically damped at all times.
 
         Args:
-            approaching_time (float): Characteristic timescale in years governing the damping
-                parameter ``k = 4.74 / approaching_time``. In a static system without blending,
-                the trajectory reaches ~95% of the prediction after this many years. Defaults to 50.
-            ensured_convergence_time (Optional[float]): If given, overrides the default full-match
-                time of ``10 * approaching_time`` years. The quintic blend will reach exact
-                convergence with the prediction at this many years after the transition point.
+            approaching_time (float): Characteristic timescale in years. Sets the initial
+                damping parameter ``k₀ = 4.74 / approaching_time`` and the timescale over
+                which k doubles: ``k(t) = k₀ · (1 + (Δt / approaching_time)²)``.
+                Defaults to 50.
 
         Returns:
             np.ndarray: Stock array with exact historical values preserved up to the last
@@ -220,7 +218,6 @@ class CriticallyDampedBlender:
             t_future,
             p_future,
             approaching_time,
-            ensured_convergence_time,
         )
 
         # 4. Construct the final contiguous array
@@ -239,22 +236,20 @@ class CriticallyDampedBlender:
         t_array: np.ndarray,
         p_array: np.ndarray,
         approaching_time: float,
-        ensured_convergence_time: Optional[float] = None,
     ) -> np.ndarray:
         """
-        Integrate a trajectory from an initial state (y0, v0) that smoothly tracks a target prediction p_array
-        using a critically damped PD-controller, with a long-term quintic blend for exact convergence.
+        Integrate a trajectory from an initial state (y0, v0) that smoothly tracks a target
+        prediction p_array using a critically damped PD-controller with a time-varying k.
 
-        The controller drives Y toward P via a dynamic critically damped spring-damper system :
-            Y'' + 2k·Y' + k²Y = k²P(t) + 2k·P'(t)
-        integrated with a semi-implicit Euler method.
+        The controller drives Y toward P via:
+            Y'' + 2k(t)·Y' + k(t)²Y = k(t)²P(t) + 2k(t)·P'(t)
+        integrated with a semi-implicit Euler method, where:
+            k(t) = k₀ · (1 + (Δt / approaching_time)²),  k₀ = 4.74 / approaching_time
 
-        To avoid overshoot during saturation phases, P'(t) is estimated using a look-ahead index
-        that decreases from 5 to 1 over the first half of ``approaching_time``, then stays at 1.
-        On top of the controller, a quintic blend progressively replaces Y with P over the full
-        time window, guaranteeing an exact match with P at ``t0 + 10 * approaching_time``.
-        In a static system (no P' term) without blending, the system converges to 95% of the
-        prediction after ``approaching_time`` years.
+        k grows quadratically, reaching 2k₀ at ``Δt = approaching_time`` and continuing beyond. The system
+        remains critically damped at all times. To avoid overshoot during saturation phases,
+        P'(t) is estimated using a look-ahead index that decreases from 5 to 1 over the first
+        half of ``approaching_time``, then stays at 1.
 
         Args:
             y0 (np.ndarray): Initial position at the transition point. Shape ``(spatial...)``.
@@ -262,18 +257,24 @@ class CriticallyDampedBlender:
             t_array (np.ndarray): 1D array of time values starting at the transition point.
             p_array (np.ndarray): Target prediction array with time as the first axis,
                 shape ``(len(t_array), spatial...)``. Must be uniformly spaced in time.
-            approaching_time (float): Characteristic timescale in years. Governs the damping
-                parameter ``k = 4.74 / approaching_time`` and the look-ahead ramp length.
-            ensured_convergence_time (Optional[float]): If given, overrides the default full-match
-                time of ``10 * approaching_time`` years. The quintic blend reaches exact convergence
-                with the prediction at this many years after ``t_array[0]``.
+            approaching_time (float): Characteristic timescale in years. Sets the initial
+                damping parameter ``k₀ = 4.74 / approaching_time`` and the timescale over
+                at which k reaches 2k₀ (and continues growing).
 
         Returns:
             np.ndarray: Integrated trajectory array of shape ``(len(t_array), spatial...)``.
         """
         n_steps = len(t_array)
         dt = t_array[1] - t_array[0]
-        k = 4.74 / approaching_time
+
+        # --- Precompute time-varying k ---
+        # 4.74 is the solution to (1+x)*exp(-x) = 0.05: the critically damped step response
+        # So this means 95% convergence within approaching_time years, if k = k0.
+        k0 = 4.74 / approaching_time
+        # k grows quadratically up to a maximum value.
+        dt_elapsed = t_array - t_array[0]
+        k_arr = k0 * (1 + (dt_elapsed / approaching_time) ** 2)
+        k_arr = np.minimum(k_arr, 0.3)
 
         # --- Precompute look-ahead predictor velocity for each timestep ---
         # Using P'(t + n_fwd*dt) [fwd = forward] instead of P'(t) anticipates
@@ -289,18 +290,6 @@ class CriticallyDampedBlender:
         lookahead_idx = np.minimum(np.arange(n_steps) + n_fwd - 1, n_steps - 2)
         vp_array = (p_array[lookahead_idx + 1] - p_array[lookahead_idx]) / dt
 
-        # --- Precompute quintic blend weights ---
-        # Alpha blends from 0 to 1 within 10x approaching_time using quintic function.
-        t0 = t_array[0]
-        t_full_match = (
-            t0 + 10 * approaching_time
-            if ensured_convergence_time is None
-            else t0 + ensured_convergence_time
-        )
-        alpha_arr = blending_factor(
-            np.clip((t_array - t0) / (t_full_match - t0), 0.0, 1.0), "quintic"
-        )  # (n_steps,)
-
         # --- Initialize state ---
         y = np.zeros_like(p_array, dtype=float)
         v = np.zeros_like(p_array, dtype=float)
@@ -309,16 +298,12 @@ class CriticallyDampedBlender:
 
         # --- Integrate ---
         for i in range(1, n_steps):
+            k = k_arr[i]
             # 1. Compute acceleration
             dv_dt = k**2 * (p_array[i] - y_curr) + 2 * k * (vp_array[i] - v_curr)
             # 2. Update velocity and position
             v_curr = v_curr + dv_dt * dt
             y_curr = y_curr + v_curr * dt
-
-            # Quintic blend toward prediction
-            y_curr = (1 - alpha_arr[i]) * y_curr + alpha_arr[i] * p_array[i]
-            v_curr = (y_curr - y[i - 1]) / dt  # re-sync velocity after blend
-
             # Store results
             y[i], v[i] = y_curr, v_curr
 
