@@ -330,9 +330,7 @@ class CriticallyDampedBlender:
         # Fractional interpolation between the two bracketing integer positions
         lo = look_pos.astype(int)
         hi = np.minimum(lo + 1, n_steps - 1)
-        w = (look_pos - lo).reshape(
-            (-1,) + (1,) * (p_array.ndim - 1)
-        )  # broadcast over spatial dims
+        w = (look_pos - lo).reshape((-1,) + (1,) * (p_array.ndim - 1))
         return (1 - w) * vp_raw[lo] + w * vp_raw[hi]
 
     def _lifetime_dependent_n(
