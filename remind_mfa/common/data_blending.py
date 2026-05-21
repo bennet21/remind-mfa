@@ -289,6 +289,10 @@ class CriticallyDampedBlender:
         # now, use n_fwd to construct index for p velocity
         lookahead_idx = np.minimum(np.arange(n_steps) + n_fwd - 1, n_steps - 2)
         vp_array = (p_array[lookahead_idx + 1] - p_array[lookahead_idx]) / dt
+        
+        # Fix boundary case where the last point cannot look ahead
+        if n_steps > 2:
+            vp_array[-1] = 2 * vp_array[-2] - vp_array[-3]
 
         # --- Initialize state ---
         y = np.zeros_like(p_array, dtype=float)
