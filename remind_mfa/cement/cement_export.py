@@ -46,7 +46,9 @@ class CementDataExporter(CommonDataExporter):
         )
 
         # cement demand
-        cement_demand_by_stock_type = mfa.flows["market_cement => prod_product"].sum_to(reported_dims)
+        cement_demand_by_stock_type = mfa.flows["market_cement => prod_product"].sum_to(
+            reported_dims
+        )
         demand_df = self.to_iamc_df(cement_demand_by_stock_type)
         demand_df["variable"] = (
             "Material Demand|Non-Metallic Minerals|Cement|" + demand_df["Stock Type"]
@@ -63,7 +65,9 @@ class CementDataExporter(CommonDataExporter):
         )
 
         # cement stocks
-        cement_stock_by_stock_type = mfa.stocks["in_use"].stock[{"k": "cement"}].sum_to(reported_dims)
+        cement_stock_by_stock_type = (
+            mfa.stocks["in_use"].stock[{"k": "cement"}].sum_to(reported_dims)
+        )
         stock_df = self.to_iamc_df(cement_stock_by_stock_type)
         stock_df["variable"] = (
             "Material Stock|Non-Metallic Minerals|Cement|" + stock_df["Stock Type"]
@@ -80,7 +84,9 @@ class CementDataExporter(CommonDataExporter):
         )
 
         # cement eol
-        cement_scrap_by_stock_type = mfa.stocks["in_use"].outflow[{"k": "cement"}].sum_to(reported_dims)
+        cement_scrap_by_stock_type = (
+            mfa.stocks["in_use"].outflow[{"k": "cement"}].sum_to(reported_dims)
+        )
         scrap_df = self.to_iamc_df(cement_scrap_by_stock_type)
         scrap_df["variable"] = "Scrap|Non-Metallic Minerals|Cement|" + scrap_df["Stock Type"]
         scrap_df = scrap_df.drop(columns=["Stock Type"])
