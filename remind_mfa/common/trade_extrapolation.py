@@ -169,18 +169,10 @@ class TradeExtrapolator(RemindMFABaseModel):
         Scaled with the other domestic quantity than the first
         (exports with dom_supply, imports with dom_demand).
         But this depends on the second trade itself, via the mass balance, which results in
-        a 2x2 equation system. We solve it with a fixed-point iteration.
-        Initialization: we estimate the future scaler_second (dom_supply) by substituting
-        historic_second_0 as a proxy for future_second in the mass balance, then use the
-        resulting scaler_second growth ratio to initialize future_second. This is essentially
-        one Newton step before the fixed-point iteration begins, and gives a well-conditioned
-        starting point regardless of whether historic_first_0 is zero or not.
+        a 2x2 equation system. We solve it with a fixed-point iteration starting from
+        historic_second_0. 
         """
-        init_scaler_second = (
-            self.scaler_first - self.future_first + self.historic_second_0 + stopover_trade
-        ).maximum(0)
-        init_d_ratio = init_scaler_second / self.scaler_second_0.maximum(1)
-        self.future_second[...] = self.historic_second_0 * init_d_ratio
+        self.future_second[...] = self.historic_second_0
         self.future_second[self.id_hist] = self.historic_second
         for _ in range(3):
             self.scaler_second = (
