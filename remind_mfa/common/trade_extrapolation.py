@@ -170,7 +170,7 @@ class TradeExtrapolator(RemindMFABaseModel):
         (exports with dom_supply, imports with dom_demand).
         But this depends on the second trade itself, via the mass balance, which results in
         a 2x2 equation system. We solve it with a fixed-point iteration starting from
-        historic_second_0. 
+        historic_second_0.
         """
         self.future_second[...] = self.historic_second_0
         self.future_second[self.id_hist] = self.historic_second
