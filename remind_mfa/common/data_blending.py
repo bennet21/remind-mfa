@@ -185,12 +185,14 @@ class CriticallyDampedBlender:
 
         where Y is the blended trajectory, P the extrapolation target, and
         k = 4.74 / approaching_time. The ODE is solved using a semi-implicit Euler
-        method with an anticipatory D-term to prevent overshoot.
+        method with an anticipatory D-term to prevent overshoot. A quadratic nudge
+        applied after each step guarantees convergence to P over the long run.
 
         Args:
             approaching_time (float): Characteristic timescale in years. Sets the damping
-                parameter ``k = 4.74 / approaching_time``, giving 95% step-response
-                convergence within ``approaching_time`` years. Defaults to 50.
+                parameter ``k = 4.74 / approaching_time`` (95% step-response convergence
+                within ``approaching_time`` years) and the nudge timescale
+                ``10 * approaching_time``. Defaults to 50.
 
         Returns:
             np.ndarray: Stock array with exact historical values preserved up to the last
@@ -250,7 +252,8 @@ class CriticallyDampedBlender:
             p_array (np.ndarray): Target prediction array with time as the first axis,
                 shape ``(len(t_array), spatial...)``. Must be uniformly spaced in time.
             approaching_time (float): Characteristic timescale in years. Sets the damping
-                parameter ``k = 4.74 / approaching_time``.
+                parameter ``k = 4.74 / approaching_time`` and the nudge timescale
+                ``10 * approaching_time``.
 
         Returns:
             np.ndarray: Integrated trajectory array of shape ``(len(t_array), spatial...)``.
@@ -260,11 +263,9 @@ class CriticallyDampedBlender:
 
         # --- Precompute k and nudge schedule ---
         # 4.74 is the solution to (1+x)*exp(-x) = 0.05: the critically damped step response
-        # Y(t) = 1 - (1 + k*t)*exp(-k*t) reaches 95% of its target when k*t = 4.74.
-        # So k = 4.74 / approaching_time means 95% convergence within approaching_time years.
+        # k = 4.74 / approaching_time means 95% convergence within approaching_time years.
         k = 4.74 / approaching_time
-        # Nudge alpha grows quadratically from 0 to 1 over nudge_timescale, guaranteeing
-        # convergence to P regardless of how strongly P is growing.
+        # Nudge alpha grows quadratically from 0 to 1 over nudge_timescale
         nudge_timescale = 10 * approaching_time
         dt_elapsed = t_array - t_array[0]
         nudge_arr = np.minimum(1.0, (dt_elapsed / nudge_timescale) ** 2)
