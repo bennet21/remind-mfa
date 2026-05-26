@@ -83,7 +83,9 @@ class CementVisualizer(CommonVisualizer):
         )
 
     def visualize_prod_clinker(self, mfa: fd.MFASystem):
-        production = mfa.flows["prod_clinker => market_clinker"] + mfa.flows["prod_clinker => sysenv"]
+        production = (
+            mfa.flows["prod_clinker => market_clinker"] + mfa.flows["prod_clinker => sysenv"]
+        )
         self.visualize_production(mfa=mfa, production=production, name="Clinker")
 
     def visualize_prod_cement(self, mfa: fd.MFASystem, regional: bool = False):
