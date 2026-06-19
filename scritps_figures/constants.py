@@ -7,7 +7,8 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 
-CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-06-01--14-42-19.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-19--16-47-00.pickle"
+SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
 CEMENT_MASK = {"k": "cement"}
@@ -15,6 +16,33 @@ CONCRETE_MASK = {"m": "concrete"}
 STOCK_TYPE_DIM = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
 STOCK_TYPE_MASK = {"s": STOCK_TYPE_DIM}
 TOTAL_MASK = {**CEMENT_MASK, **CONCRETE_MASK, **STOCK_TYPE_MASK}
+
+STRUCTURE_DISPLAY_NAMES = {
+    "C": "Concrete",
+    "M": "Masonry",
+    "T": "Timber",
+    "S": "Steel",
+    "nan": "Other",  # Industrial + Civil cement, not resolved into a building structure
+}
+
+# Structure items treated as the non-building "Other" category (rendered in grey, stacked first).
+OTHER_STRUCTURE_KEYS = {"nan", "N/A"}
+OTHER_STRUCTURE_COLOR = "#999999"
+
+# Building function split (subdivides each structure via shading).
+FUNCTION_DISPLAY_NAMES = {
+    "RS": "Single-family res.",
+    "RM": "Multi-family res.",
+    "Com": "Commercial",
+}
+
+# One distinct, mid-tone hue per building structure; functions become shades of it.
+STRUCTURE_BASE_COLORS = {
+    "C": "#2C7FB8",  # blue
+    "M": "#D9820B",  # orange
+    "T": "#2CA25F",  # green
+    "S": "#B0436B",  # rose
+}
 
 REGION_DISPLAY_NAMES = {
     "CAZ": "Canada, NZ, Australia",
