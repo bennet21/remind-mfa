@@ -8,9 +8,22 @@ from remind_mfa.common.data_blending import CriticallyDampedBlender
 
 class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
 
-    def compute(self, td_stock: fd.FlodymArray, historic_trade: TradeSet,  scale: bool = False):
+    def compute(self, td_in_use: fd.Stock, historic_trade: TradeSet,  scale: bool = False):
         """
         Perform all computations for the MFA system.
+        The building split and MI parameters for the bottom-up MFA should ultimately set the inflow,
+        but the data only describes the splits/mi of the current stock of the bottom-up MFA.
+        Here, we assume a constant split/MI in the historical period, which will rebuild
+        the recently observed stock. Thereafter (in future), scenario-adjusted split/MI 
+        are applied to the inflow, and the stock is computed from there.
+        Implementation approach:
+        1. Compute the floorspace inflow (both historical and future) from the floorspace stock.
+        2. Apply the split/MI to the floorspace inflow.
+        3. Calculate the inflow-driven DSM to get the bottom-up concrete inflow.
+        4. Apply the MI weighted split and MI to the td inflow (from `td_in_use` stock).
+        5. Calculate the inflow-driven DSM to get the top-down concrete inflow (including splits).
+        6. Blend td into bu stock where bu is available, use td everywhere else.
+        7. Compute the complete MFA with the blended stock and historic trade.
         """
         if scale:
             raise NotImplementedError("Scaling not implemented for bottom-up system.")
@@ -18,34 +31,62 @@ class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
         prm = self.parameters
         stk = self.stocks
 
-        flow_split = (
-            prm["function_buildings_split"]
-            * prm["structure_buildings_split"]
-            * prm["concrete_building_mi"]
-            ).get_shares_over(("f", "b"))
-
-        # Resolve the top-down in-use stock into building dimensions (f, b) by applying the split.
-        # No dynamic stock model is needed here: because lifetimes do not depend on f or b
-        td_stock_expanded = (td_stock * flow_split).sum_over("k")
-
-        # Calculate floorspace stock:
-        stk["floorspace"].stock = prm["floorspace"]
+        # ------------- Compute BU stock -------------
+        # Calculate floorspace inflow from stock change + lifetime (stock-driven)
+        stock = prm["floorspace"] # TODO remove once mrmfa is fixed
+        stock[{'t': [y for y in stock.dims['t'].items if y < 2000]}] = 0 # TODO remove once mrmfa is fixed
+        stk["floorspace"].stock = stock
         stk["floorspace"].lifetime_model.set_prms(
             mean=prm["lifetime_mean"],
             std=prm["lifetime_std"],
         )
         stk["floorspace"].compute()
 
-        # Calculate bottom_up inflow
-        stk["bu_in_use"].inflow[...] = stk["floorspace"].inflow * flow_split * prm["concrete_building_mi"]
+        # Add bu dimensions to the inflow + calculate bu stock (inflow-driven)
+        stk["bu_in_use"].inflow[...] = (
+            stk["floorspace"].inflow
+            * prm["function_buildings_split"]
+            * prm["structure_buildings_split"]
+            * prm["concrete_building_mi"]
+        )
         stk["bu_in_use"].lifetime_model.set_prms(
             mean=prm["lifetime_mean"],
             std=prm["lifetime_std"],
         )
         stk["bu_in_use"].compute()
 
+        # ------------- Compute TD stock -------------
+        # BU shares are given with respect to floorspace
+        # => needs to be weighted by MI for use in mass stock
+        mi_weighted_split = (
+            prm["function_buildings_split"]
+            * prm["structure_buildings_split"]
+            * prm["concrete_building_mi"]
+            ).get_shares_over(("f", "b"))
+
+        # Resolve the top-down in-use stock into building dimensions (f, b).
+        # Add bu dimensions to the td infwlow and recalculate the td stock (inflow-driven)
+        # Equivalent to floorspace approach. Necessary to translate inflow splits into stock splits.
+        # Building splits are only applied to concrete, mortar gets N/A label
+        td_inflow = td_in_use.inflow.sum_over("k")
+        stk["td_in_use"].inflow[{"m": "concrete"}] = td_inflow[{"m": "concrete"}] * mi_weighted_split
+        stk["td_in_use"].inflow[{"m": "mortar", "f": "nan", "b": "nan"}] = td_inflow[{"m": "mortar"}]
+        stk["td_in_use"].lifetime_model.set_prms(
+            mean=prm["lifetime_mean"],
+            std=prm["lifetime_std"],
+        )
+        stk["td_in_use"].compute()
+        td_stock_expanded = stk["td_in_use"].stock
+
+        # ------------- Blend BU and TD stocks -------------
+        # Preparation: remove (parts of the) dimensions that are not present in bu
         reduced_bu_stock = stk["bu_in_use"].stock[self.reduced_dim_mask]
-        reduced_td_stock = td_stock_expanded[self.reduced_dim_mask][{"m": "concrete"}][{"t": self.dims["h"]}]
+        #reduced_td_stock = td_stock_expanded[self.reduced_dim_mask][{"m": "concrete"}][{"t": self.dims["h"]}]
+        reduced_td_stock = td_stock_expanded[{
+            **self.reduced_dim_mask,
+            "m": "concrete",
+            "t": self.dims["h"],
+        }]
 
         # Combine MFAs
         # blend smoothly between historic td and future bu

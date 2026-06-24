@@ -116,7 +116,7 @@ class CementModel(CommonModel):
         # compute reconciled future bottom-up mfa
         self.bu_mfa_reconciled = self.make_bottom_up_mfa()
         self.bu_mfa_reconciled.compute(
-            self.td_mfa_reconciled.stocks["in_use"].stock, self.td_hist_mfa_reconciled.trade_set
+            self.td_mfa_reconciled.stocks["in_use"], self.td_hist_mfa_reconciled.trade_set
         )
 
         if self.cfg.model_switches.parameter_reconciliation.do_combine_mfas:
@@ -125,7 +125,7 @@ class CementModel(CommonModel):
     def reconcile_parameters(
         self,
         max_iter: int = 10,
-        tol: Optional[float] = None,
+        tol: Optional[float] = 1e-3,
     ):
         """Reconcile parameters between top-down and bottom-up stocks.
 
