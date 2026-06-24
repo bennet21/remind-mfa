@@ -7,7 +7,7 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 
-CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-19--16-47-00.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-23--19-24-01.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
@@ -22,7 +22,7 @@ STRUCTURE_DISPLAY_NAMES = {
     "M": "Masonry",
     "T": "Timber",
     "S": "Steel",
-    "nan": "Other",  # Industrial + Civil cement, not resolved into a building structure
+    "nan": "Other (industrial, civil, masonry)",
 }
 
 # Structure items treated as the non-building "Other" category (rendered in grey, stacked first).

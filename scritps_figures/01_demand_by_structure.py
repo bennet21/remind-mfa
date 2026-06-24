@@ -74,19 +74,8 @@ def _shade_levels(n: int) -> list[float]:
 
 
 def build_series() -> list[dict]:
-    """Ordered stack series (bottom -> top): non-building 'Other', then structure x function."""
+    """Ordered stack series (bottom -> top): structure x function, then non-building 'Other' on top."""
     series = []
-
-    for b in _other:
-        series.append(
-            {
-                "selection": {"b": b},
-                "color": OTHER_STRUCTURE_COLOR,
-                "name": STRUCTURE_DISPLAY_NAMES.get(str(b), str(b)),
-                "group": "other",
-                "grouptitle": None,
-            }
-        )
 
     levels = _shade_levels(len(_functions))
     for b in _buildings:
@@ -102,6 +91,17 @@ def build_series() -> list[dict]:
                     "grouptitle": structure_name,
                 }
             )
+
+    for b in _other:
+        series.append(
+            {
+                "selection": {"b": b},
+                "color": OTHER_STRUCTURE_COLOR,
+                "name": STRUCTURE_DISPLAY_NAMES.get(str(b), str(b)),
+                "group": "other",
+                "grouptitle": None,
+            }
+        )
 
     return series
 
