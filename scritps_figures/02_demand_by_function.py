@@ -1,14 +1,12 @@
-"""Figure 1: combined-MFA cement demand stacked by building structure and function.
+"""Figure 2: combined-MFA cement demand stacked by stock type and building function.
 
-Stacked areas show the reconciled (combined) cement demand split over the building-structure
-dimension (`b`: Concrete / Masonry / Timber / Steel), with each structure further subdivided over
-the building-function dimension (`f`: single-family res. / multi-family res. / commercial) via
-shading. A separate grey "Other" band holds non-building (industrial + civil) cement. On top, a
+Stacked areas show cement demand split into residential (single-family / multi-family shaded),
+commercial concrete, and a three-band "Other" (industrial, civil, res./com. mortar). On top, a
 black line shows the pre-reconciliation top-down total cement demand. Produces a global figure and
 a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
-    uv run python scritps_figures/01_demand_by_structure.py
+    uv run python scritps_figures/02_demand_by_function.py
 """
 
 import math
@@ -22,17 +20,13 @@ from constants import (
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
-    STRUCTURE_DISPLAY_NAMES,
-    FUNCTION_DISPLAY_NAMES,
-    STRUCTURE_BASE_COLORS,
-    OTHER_STRUCTURE_KEYS,
+    STOCK_TYPE_BASE_COLORS,
     OTHER_IND_COLOR,
     OTHER_IND_NAME,
     OTHER_CIV_COLOR,
     OTHER_CIV_NAME,
     OTHER_RES_COM_MORTAR_COLOR,
     OTHER_RES_COM_MORTAR_NAME,
-    COLOR_PALETTE,
 )
 from helpers import load_mfas, shade, shade_levels
 
@@ -47,45 +41,54 @@ td = mfas["td"]
 
 time = combined.stocks["in_use"].stock.dims["t"].items
 regions = combined.stocks["in_use"].inflow.dims["r"].items
-_all_structures = combined.stocks["in_use"].inflow.dims["b"].items
-_all_functions = combined.stocks["in_use"].inflow.dims["f"].items
 
-_buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
-_functions = [f for f in _all_functions if str(f) in FUNCTION_DISPLAY_NAMES]
+RES_COLOR = STOCK_TYPE_BASE_COLORS["Res"]
+COM_COLOR = STOCK_TYPE_BASE_COLORS["Com"]
 
-
-def build_series() -> list[dict]:
-    """Ordered stack series (bottom -> top): structure x function, then non-building 'Other' on top."""
-    series = []
-
-    levels = shade_levels(len(_functions))
-    for b in _buildings:
-        base = STRUCTURE_BASE_COLORS.get(str(b), COLOR_PALETTE[0])
-        structure_name = STRUCTURE_DISPLAY_NAMES.get(str(b), str(b))
-        for f, t in zip(_functions, levels):
-            series.append(
-                {
-                    "selections": [{"b": b, "f": f}],
-                    "color": shade(base, t),
-                    "name": FUNCTION_DISPLAY_NAMES.get(str(f), str(f)),
-                    "group": str(b),
-                    "grouptitle": structure_name,
-                }
-            )
-
-    # Three grey sub-categories for non-building cement, stacked on top.
-    series.append({"selections": [{"s": "Ind"}], "color": OTHER_IND_COLOR,
-                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other"})
-    series.append({"selections": [{"s": "Civ"}], "color": OTHER_CIV_COLOR,
-                   "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None})
-    series.append({"selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],
-                   "color": OTHER_RES_COM_MORTAR_COLOR,
-                   "name": OTHER_RES_COM_MORTAR_NAME, "group": "other", "grouptitle": None})
-
-    return series
-
-
-SERIES = build_series()
+SERIES = [
+    {
+        "selections": [{"s": "Res", "m": "concrete", "f": "RS"}],
+        "color": shade(RES_COLOR, shade_levels(2)[0]),
+        "name": "Single-family res.",
+        "group": "res",
+        "grouptitle": "Residential",
+    },
+    {
+        "selections": [{"s": "Res", "m": "concrete", "f": "RM"}],
+        "color": shade(RES_COLOR, shade_levels(2)[1]),
+        "name": "Multi-family res.",
+        "group": "res",
+        "grouptitle": None,
+    },
+    {
+        "selections": [{"s": "Com", "m": "concrete"}],
+        "color": COM_COLOR,
+        "name": "Commercial",
+        "group": "com",
+        "grouptitle": None,
+    },
+    {
+        "selections": [{"s": "Ind"}],
+        "color": OTHER_IND_COLOR,
+        "name": OTHER_IND_NAME,
+        "group": "other",
+        "grouptitle": "Other",
+    },
+    {
+        "selections": [{"s": "Civ"}],
+        "color": OTHER_CIV_COLOR,
+        "name": OTHER_CIV_NAME,
+        "group": "other",
+        "grouptitle": None,
+    },
+    {
+        "selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],
+        "color": OTHER_RES_COM_MORTAR_COLOR,
+        "name": OTHER_RES_COM_MORTAR_NAME,
+        "group": "other",
+        "grouptitle": None,
+    },
+]
 
 
 def demand(selections, region=None):
@@ -123,7 +126,7 @@ def plot_global(output_name: str):
                 x=time,
                 y=demand(s["selections"]).values,
                 mode="lines",
-                stackgroup="struct",
+                stackgroup="func",
                 line={"color": s["color"], "width": 0.3},
                 fillcolor=s["color"],
                 name=s["name"],
@@ -186,7 +189,7 @@ def plot_regional(output_name: str):
                     x=time,
                     y=demand(s["selections"], region=region).values,
                     mode="lines",
-                    stackgroup=f"struct{index}",  # isolate stacking per panel
+                    stackgroup=f"func{index}",
                     line={"color": s["color"], "width": 0.3},
                     fillcolor=s["color"],
                     name=s["name"],
@@ -264,7 +267,7 @@ def plot_regional(output_name: str):
     save(fig, output_name, width=1700, height=800)
 
 
-plot_global("fig1_demand_by_structure_global")
-plot_regional("fig1_demand_by_structure_regional")
+plot_global("fig2_demand_by_function_global")
+plot_regional("fig2_demand_by_function_regional")
 
 print("END")

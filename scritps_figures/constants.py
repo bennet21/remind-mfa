@@ -25,9 +25,18 @@ STRUCTURE_DISPLAY_NAMES = {
     "nan": "Other (industrial, civil, masonry)",
 }
 
-# Structure items treated as the non-building "Other" category (rendered in grey, stacked first).
+# Structure items treated as the non-building "Other" category (stacked first, split into sub-categories).
 OTHER_STRUCTURE_KEYS = {"nan", "N/A"}
-OTHER_STRUCTURE_COLOR = "#999999"
+
+# Three grey shades for the Other sub-categories (darkest -> lightest), kept close together
+# so they recede visually relative to the saturated building-use colors.
+OTHER_IND_COLOR = "#8a8a8a"
+OTHER_CIV_COLOR = "#a4a4a4"
+OTHER_RES_COM_MORTAR_COLOR = "#bebebe"
+
+OTHER_IND_NAME = "Industrial"
+OTHER_CIV_NAME = "Civil"
+OTHER_RES_COM_MORTAR_NAME = "Res./com. mortar"
 
 # Building function split (subdivides each structure via shading).
 FUNCTION_DISPLAY_NAMES = {
@@ -120,6 +129,11 @@ COLOR_PALETTE_4 = [
     "#B89968",  # brown light
     "#4D3412",  # brown dark
 ]
+
+STOCK_TYPE_BASE_COLORS = {
+    "Res": "#C0392B",  # crimson-red
+    "Com": "#16A085",  # teal
+}
 
 COLORS_REMIND = {
     "CAZ": "#f58231",
