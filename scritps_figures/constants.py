@@ -7,7 +7,7 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 
-CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-23--19-24-01.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-24--12-37-24.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
@@ -154,3 +154,20 @@ COLORS_REMIND = {
 }
 
 COLOR_PALETTE = COLOR_PALETTE_1
+
+SSP_PICKLENAMES = {
+    "SSP1": "model_cement_SSP1_h12_2026-06-24--16-48-39.pickle",
+    "SSP2": "model_cement_SSP2_h12_2026-06-24--16-50-55.pickle",
+    "SSP3": "model_cement_SSP3_h12_2026-06-24--16-53-17.pickle",
+    "SSP4": "model_cement_SSP4_h12_2026-06-24--16-55-36.pickle",
+    "SSP5": "model_cement_SSP5_h12_2026-06-24--16-58-24.pickle",
+}
+SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
+SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}
+SSP_COLORS = {
+    "SSP1": "#2166AC",  # blue
+    "SSP2": "#4DAC26",  # green
+    "SSP3": "#D01C8B",  # magenta
+    "SSP4": "#F1A340",  # orange
+    "SSP5": "#762A83",  # purple
+}
