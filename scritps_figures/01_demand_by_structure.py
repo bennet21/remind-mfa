@@ -75,7 +75,7 @@ def build_series() -> list[dict]:
 
     # Three grey sub-categories for non-building cement, stacked on top.
     series.append({"selections": [{"s": "Ind"}], "color": OTHER_IND_COLOR,
-                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other"})
+                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other cement use"})
     series.append({"selections": [{"s": "Civ"}], "color": OTHER_CIV_COLOR,
                    "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None})
     series.append({"selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],

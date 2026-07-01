@@ -49,14 +49,14 @@ SERIES = [
     {
         "selections": [{"s": "Res", "m": "concrete", "f": "RS"}],
         "color": shade(RES_COLOR, shade_levels(2)[0]),
-        "name": "Single-family res.",
+        "name": "Single-family res. buildings",
         "group": "res",
         "grouptitle": "Residential",
     },
     {
         "selections": [{"s": "Res", "m": "concrete", "f": "RM"}],
         "color": shade(RES_COLOR, shade_levels(2)[1]),
-        "name": "Multi-family res.",
+        "name": "Multi-family res. buildings",
         "group": "res",
         "grouptitle": None,
     },
@@ -72,7 +72,7 @@ SERIES = [
         "color": OTHER_IND_COLOR,
         "name": OTHER_IND_NAME,
         "group": "other",
-        "grouptitle": "Other",
+        "grouptitle": "Other cement use",
     },
     {
         "selections": [{"s": "Civ"}],

@@ -18,10 +18,10 @@ STOCK_TYPE_MASK = {"s": STOCK_TYPE_DIM}
 TOTAL_MASK = {**CEMENT_MASK, **CONCRETE_MASK, **STOCK_TYPE_MASK}
 
 STRUCTURE_DISPLAY_NAMES = {
-    "C": "Concrete",
-    "M": "Masonry",
-    "T": "Timber",
-    "S": "Steel",
+    "C": "Concrete buildings",
+    "M": "Masonry buildings",
+    "T": "Timber buildings",
+    "S": "Steel buildings",
     "nan": "Other (industrial, civil, masonry)",
 }
 
@@ -40,8 +40,8 @@ OTHER_RES_COM_MORTAR_NAME = "Res./com. mortar"
 
 # Building function split (subdivides each structure via shading).
 FUNCTION_DISPLAY_NAMES = {
-    "RS": "Single-family res.",
-    "RM": "Multi-family res.",
+    "RS": "Single-family res. buildings",
+    "RM": "Multi-family res. buildings",
     "Com": "Commercial",
 }
 
