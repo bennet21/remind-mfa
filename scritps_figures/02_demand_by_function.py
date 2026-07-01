@@ -27,6 +27,7 @@ from constants import (
     OTHER_CIV_NAME,
     OTHER_RES_COM_MORTAR_COLOR,
     OTHER_RES_COM_MORTAR_NAME,
+    OTHER_STRUCTURE_KEYS,
 )
 from helpers import load_mfas, shade, shade_levels
 
@@ -37,6 +38,7 @@ YLABEL = "Cement demand (Mt)"
 LABEL_YEAR = 2080
 MIN_FRACTION_GLOBAL = 0.04
 MIN_FRACTION_REGIONAL = 0.10
+STRUCTURE_SHADE_SPREAD = 0.10
 
 mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
 combined = mfas["combined"]
@@ -44,24 +46,32 @@ td = mfas["td"]
 
 time = combined.stocks["in_use"].stock.dims["t"].items
 regions = combined.stocks["in_use"].inflow.dims["r"].items
+_all_structures = combined.stocks["in_use"].inflow.dims["b"].items
+_buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
 
 RES_COLOR = STOCK_TYPE_BASE_COLORS["Res"]
 COM_COLOR = STOCK_TYPE_BASE_COLORS["Com"]
 
+_res_shade_levels = shade_levels(2)
+
 SERIES = [
     {
         "selections": [{"s": "Res", "m": "concrete", "f": "RS"}],
-        "color": shade(RES_COLOR, shade_levels(2)[0]),
+        "color": shade(RES_COLOR, _res_shade_levels[0]),
         "name": "Single-family res. buildings",
         "group": "res",
         "grouptitle": "Residential",
+        "base_hex": RES_COLOR,
+        "shade_center": _res_shade_levels[0],
     },
     {
         "selections": [{"s": "Res", "m": "concrete", "f": "RM"}],
-        "color": shade(RES_COLOR, shade_levels(2)[1]),
+        "color": shade(RES_COLOR, _res_shade_levels[1]),
         "name": "Multi-family res. buildings",
         "group": "res",
         "grouptitle": None,
+        "base_hex": RES_COLOR,
+        "shade_center": _res_shade_levels[1],
     },
     {
         "selections": [{"s": "Com", "m": "concrete"}],
@@ -69,6 +79,8 @@ SERIES = [
         "name": "Commercial",
         "group": "com",
         "grouptitle": None,
+        "base_hex": COM_COLOR,
+        "shade_center": 0.0,
     },
     {
         "selections": [{"s": "Ind"}],
@@ -135,6 +147,12 @@ def _text_color(color: str) -> str:
     return "white" if 0.299 * r + 0.587 * g + 0.114 * b < 160 else "#333333"
 
 
+def _structure_shade_levels(center: float, n: int) -> list:
+    if n == 1:
+        return [center]
+    return [center - STRUCTURE_SHADE_SPREAD + 2 * STRUCTURE_SHADE_SPREAD * i / (n - 1) for i in range(n)]
+
+
 def _band_midpoints(region=None) -> list:
     time_list = list(time)
     t_idx = min(range(len(time_list)), key=lambda i: abs(time_list[i] - LABEL_YEAR))
@@ -165,22 +183,47 @@ def _label_annotations(
     return out
 
 
+def _add_series_traces(fig, stackgroup, region=None, row=None, col=None):
+    """Add SERIES traces; building categories expand into per-structure sub-bands."""
+    add_kwargs = {"row": row, "col": col} if row is not None else {}
+
+    for s in SERIES:
+        if "base_hex" in s:
+            shade_ts = _structure_shade_levels(s["shade_center"], n=len(_buildings))
+            for b, shade_t in zip(_buildings, shade_ts):
+                sub_sel = [{**sel, "b": b} for sel in s["selections"]]
+                sub_color = shade(s["base_hex"], shade_t)
+                fig.add_trace(
+                    go.Scatter(
+                        x=time,
+                        y=demand(sub_sel, region=region).values,
+                        mode="lines",
+                        stackgroup=stackgroup,
+                        line={"color": sub_color, "width": 0.3},
+                        fillcolor=sub_color,
+                        showlegend=False,
+                    ),
+                    **add_kwargs,
+                )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=time,
+                    y=demand(s["selections"], region=region).values,
+                    mode="lines",
+                    stackgroup=stackgroup,
+                    line={"color": s["color"], "width": 0.3},
+                    fillcolor=s["color"],
+                    showlegend=False,
+                ),
+                **add_kwargs,
+            )
+
+
 def plot_global(output_name: str):
     fig = go.Figure()
 
-    for s in SERIES:
-        fig.add_trace(
-            go.Scatter(
-                x=time,
-                y=demand(s["selections"]).values,
-                mode="lines",
-                stackgroup="func",
-                line={"color": s["color"], "width": 0.3},
-                fillcolor=s["color"],
-                name=s["name"],
-                showlegend=False,
-            )
-        )
+    _add_series_traces(fig, stackgroup="func")
 
     fig.add_trace(
         go.Scatter(
@@ -235,21 +278,7 @@ def plot_regional(output_name: str):
         xref = f"x{axis_num}"
         yref = f"y{axis_num}"
 
-        for s in SERIES:
-            fig.add_trace(
-                go.Scatter(
-                    x=time,
-                    y=demand(s["selections"], region=region).values,
-                    mode="lines",
-                    stackgroup=f"func{index}",
-                    line={"color": s["color"], "width": 0.3},
-                    fillcolor=s["color"],
-                    name=s["name"],
-                    showlegend=False,
-                ),
-                row=row,
-                col=col,
-            )
+        _add_series_traces(fig, stackgroup=f"func{index}", region=region, row=row, col=col)
 
         fig.add_trace(
             go.Scatter(
