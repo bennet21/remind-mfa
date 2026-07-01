@@ -34,15 +34,15 @@ OTHER_IND_COLOR = "#8a8a8a"
 OTHER_CIV_COLOR = "#a4a4a4"
 OTHER_RES_COM_MORTAR_COLOR = "#bebebe"
 
-OTHER_IND_NAME = "Industrial"
-OTHER_CIV_NAME = "Civil"
+OTHER_IND_NAME = "Industrial buildings"
+OTHER_CIV_NAME = "Civil engineering"
 OTHER_RES_COM_MORTAR_NAME = "Res./com. mortar"
 
 # Building function split (subdivides each structure via shading).
 FUNCTION_DISPLAY_NAMES = {
     "RS": "Single-family res. buildings",
     "RM": "Multi-family res. buildings",
-    "Com": "Commercial",
+    "Com": "Commercial buildings",
 }
 
 # One distinct, mid-tone hue per building structure; functions become shades of it.

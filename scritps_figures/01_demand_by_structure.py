@@ -59,9 +59,11 @@ def build_series() -> list[dict]:
     series = []
 
     levels = shade_levels(len(_functions))
+    structure_legend_ranks = {"S": 10, "T": 20, "M": 30, "C": 40}
     for b in _buildings:
         base = STRUCTURE_BASE_COLORS.get(str(b), COLOR_PALETTE[0])
         structure_name = STRUCTURE_DISPLAY_NAMES.get(str(b), str(b))
+        struct_rank = structure_legend_ranks.get(str(b), 100)
         for f, t in zip(_functions, levels):
             series.append(
                 {
@@ -70,17 +72,21 @@ def build_series() -> list[dict]:
                     "name": FUNCTION_DISPLAY_NAMES.get(str(f), str(f)),
                     "group": str(b),
                     "grouptitle": structure_name,
+                    "legendrank": struct_rank,
                 }
             )
 
     # Three grey sub-categories for non-building cement, stacked on top.
     series.append({"selections": [{"s": "Ind"}], "color": OTHER_IND_COLOR,
-                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other cement use"})
+                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other cement use",
+                   "legendrank": 2})
     series.append({"selections": [{"s": "Civ"}], "color": OTHER_CIV_COLOR,
-                   "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None})
+                   "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None,
+                   "legendrank": 2})
     series.append({"selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],
                    "color": OTHER_RES_COM_MORTAR_COLOR,
-                   "name": OTHER_RES_COM_MORTAR_NAME, "group": "other", "grouptitle": None})
+                   "name": OTHER_RES_COM_MORTAR_NAME, "group": "other", "grouptitle": None,
+                   "legendrank": 2})
 
     return series
 
@@ -117,6 +123,18 @@ def save(fig, output_name: str, width: int, height: int):
 def plot_global(output_name: str):
     fig = go.Figure()
 
+    fig.add_trace(
+        go.Scatter(
+            x=time,
+            y=td_demand({}).values,
+            mode="lines",
+            line={"color": TD_LINE_COLOR, "width": 2},
+            name=TD_LINE_NAME,
+            legendgroup="td",
+            legendrank=1,
+        )
+    )
+
     for s in SERIES:
         fig.add_trace(
             go.Scatter(
@@ -129,19 +147,9 @@ def plot_global(output_name: str):
                 name=s["name"],
                 legendgroup=s["group"],
                 legendgrouptitle_text=s["grouptitle"],
+                legendrank=s["legendrank"],
             )
         )
-
-    fig.add_trace(
-        go.Scatter(
-            x=time,
-            y=td_demand({}).values,
-            mode="lines",
-            line={"color": TD_LINE_COLOR, "width": 2},
-            name=TD_LINE_NAME,
-            legendgroup="td",
-        )
-    )
 
     fig.add_vline(
         x=LAST_HISTORICAL_YEAR,
@@ -180,6 +188,21 @@ def plot_regional(output_name: str):
         row = index // ncols + 1
         col = index % ncols + 1
 
+        fig.add_trace(
+            go.Scatter(
+                x=time,
+                y=td_demand({"r": region}).values,
+                mode="lines",
+                line={"color": TD_LINE_COLOR, "width": 1.5},
+                name=TD_LINE_NAME,
+                legendgroup="td",
+                legendrank=1,
+                showlegend=index == 0,
+            ),
+            row=row,
+            col=col,
+        )
+
         for s in SERIES:
             fig.add_trace(
                 go.Scatter(
@@ -192,25 +215,12 @@ def plot_regional(output_name: str):
                     name=s["name"],
                     legendgroup=s["group"],
                     legendgrouptitle_text=s["grouptitle"],
+                    legendrank=s["legendrank"],
                     showlegend=index == 0,
                 ),
                 row=row,
                 col=col,
             )
-
-        fig.add_trace(
-            go.Scatter(
-                x=time,
-                y=td_demand({"r": region}).values,
-                mode="lines",
-                line={"color": TD_LINE_COLOR, "width": 1.5},
-                name=TD_LINE_NAME,
-                legendgroup="td",
-                showlegend=index == 0,
-            ),
-            row=row,
-            col=col,
-        )
 
         fig.add_vline(
             x=LAST_HISTORICAL_YEAR,
