@@ -34,6 +34,9 @@ MT_PER_T = 1e-6
 TD_LINE_COLOR = "#222222"
 TD_LINE_NAME = "Top-down demand (pre-reconciliation)"
 YLABEL = "Cement demand (Mt)"
+LABEL_YEAR = 2080
+MIN_FRACTION_GLOBAL = 0.04
+MIN_FRACTION_REGIONAL = 0.10
 
 mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
 combined = mfas["combined"]
@@ -90,6 +93,12 @@ SERIES = [
     },
 ]
 
+_INLINE_LABELS = {
+    "Single-family res. buildings": "Single-family<br>res. buildings",
+    "Multi-family res. buildings": "Multi-family<br>res. buildings",
+    "Res./com. mortar": "Res./com.<br>mortar",
+}
+
 
 def demand(selections, region=None):
     """Combined cement demand (Mt) summed to time, for the given selection(s)."""
@@ -117,6 +126,45 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
+def _text_color(color: str) -> str:
+    if color.startswith("#"):
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    else:
+        parts = color.strip("rgb()").split(",")
+        r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+    return "white" if 0.299 * r + 0.587 * g + 0.114 * b < 160 else "#333333"
+
+
+def _band_midpoints(region=None) -> list:
+    time_list = list(time)
+    t_idx = min(range(len(time_list)), key=lambda i: abs(time_list[i] - LABEL_YEAR))
+    vals = [float(demand(s["selections"], region=region).values[t_idx]) for s in SERIES]
+    total = sum(vals)
+    result, cumulative = [], 0.0
+    for s, v in zip(SERIES, vals):
+        result.append({"series": s, "val": v, "total": total, "y_mid": cumulative + v / 2})
+        cumulative += v
+    return result
+
+
+def _label_annotations(
+    region=None, xref="x", yref="y", font_size=11, min_fraction=MIN_FRACTION_GLOBAL
+) -> list:
+    out = []
+    for info in _band_midpoints(region=region):
+        if info["total"] > 0 and info["val"] / info["total"] >= min_fraction:
+            name = info["series"]["name"]
+            out.append(dict(
+                x=LABEL_YEAR, y=info["y_mid"],
+                xref=xref, yref=yref,
+                text=_INLINE_LABELS.get(name, name),
+                showarrow=False,
+                font=dict(size=font_size, color=_text_color(info["series"]["color"])),
+                xanchor="center", yanchor="middle", align="center",
+            ))
+    return out
+
+
 def plot_global(output_name: str):
     fig = go.Figure()
 
@@ -130,8 +178,7 @@ def plot_global(output_name: str):
                 line={"color": s["color"], "width": 0.3},
                 fillcolor=s["color"],
                 name=s["name"],
-                legendgroup=s["group"],
-                legendgrouptitle_text=s["grouptitle"],
+                showlegend=False,
             )
         )
 
@@ -142,7 +189,7 @@ def plot_global(output_name: str):
             mode="lines",
             line={"color": TD_LINE_COLOR, "width": 2},
             name=TD_LINE_NAME,
-            legendgroup="td",
+            showlegend=False,
         )
     )
 
@@ -159,8 +206,8 @@ def plot_global(output_name: str):
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend={"font": {"size": 11}, "tracegroupgap": 4, "groupclick": "toggleitem"},
         margin={"l": 90, "r": 30},
+        annotations=_label_annotations(),
     )
     fig.update_xaxes(title_font_size=15)
     fig.update_yaxes(title_font_size=15)
@@ -179,9 +226,14 @@ def plot_regional(output_name: str):
         horizontal_spacing=0.06,
     )
 
+    all_label_annotations = []
+
     for index, region in enumerate(regions):
         row = index // ncols + 1
         col = index % ncols + 1
+        axis_num = index + 1
+        xref = f"x{axis_num}"
+        yref = f"y{axis_num}"
 
         for s in SERIES:
             fig.add_trace(
@@ -193,9 +245,7 @@ def plot_regional(output_name: str):
                     line={"color": s["color"], "width": 0.3},
                     fillcolor=s["color"],
                     name=s["name"],
-                    legendgroup=s["group"],
-                    legendgrouptitle_text=s["grouptitle"],
-                    showlegend=index == 0,
+                    showlegend=False,
                 ),
                 row=row,
                 col=col,
@@ -208,8 +258,7 @@ def plot_regional(output_name: str):
                 mode="lines",
                 line={"color": TD_LINE_COLOR, "width": 1.5},
                 name=TD_LINE_NAME,
-                legendgroup="td",
-                showlegend=index == 0,
+                showlegend=False,
             ),
             row=row,
             col=col,
@@ -226,6 +275,14 @@ def plot_regional(output_name: str):
         )
         fig.update_yaxes(showgrid=True, row=row, col=col)
 
+        all_label_annotations += _label_annotations(
+            region=region,
+            xref=xref,
+            yref=yref,
+            font_size=9,
+            min_fraction=MIN_FRACTION_REGIONAL,
+        )
+
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13}
 
@@ -233,16 +290,9 @@ def plot_regional(output_name: str):
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend={
-            "x": 1.01,
-            "xanchor": "left",
-            "y": 0.5,
-            "yanchor": "middle",
-            "font": {"size": 12},
-            "tracegroupgap": 6,
-        },
-        margin={"t": 70, "l": 95, "b": 60, "r": 220},
+        margin={"t": 70, "l": 95, "b": 60, "r": 40},
         annotations=list(fig.layout.annotations)
+        + all_label_annotations
         + [
             dict(
                 text="Year",
