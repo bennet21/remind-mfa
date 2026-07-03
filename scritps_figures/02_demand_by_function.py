@@ -269,14 +269,29 @@ def plot_regional(output_name: str):
         horizontal_spacing=0.06,
     )
 
-    all_label_annotations = []
+    for s in SERIES:
+        fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode="markers",
+                marker={"color": s["color"], "size": 12, "symbol": "square"},
+                name=s["name"],
+                showlegend=True,
+            )
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[None], y=[None],
+            mode="lines",
+            line={"color": TD_LINE_COLOR, "width": 2},
+            name=TD_LINE_NAME,
+            showlegend=True,
+        )
+    )
 
     for index, region in enumerate(regions):
         row = index // ncols + 1
         col = index % ncols + 1
-        axis_num = index + 1
-        xref = f"x{axis_num}"
-        yref = f"y{axis_num}"
 
         _add_series_traces(fig, stackgroup=f"func{index}", region=region, row=row, col=col)
 
@@ -304,14 +319,6 @@ def plot_regional(output_name: str):
         )
         fig.update_yaxes(showgrid=True, row=row, col=col)
 
-        all_label_annotations += _label_annotations(
-            region=region,
-            xref=xref,
-            yref=yref,
-            font_size=9,
-            min_fraction=MIN_FRACTION_REGIONAL,
-        )
-
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13}
 
@@ -319,13 +326,20 @@ def plot_regional(output_name: str):
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin={"t": 70, "l": 95, "b": 60, "r": 40},
+        margin={"t": 70, "l": 95, "b": 130, "r": 40},
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.16,
+            xanchor="center",
+            x=0.5,
+            font={"size": 12},
+        ),
         annotations=list(fig.layout.annotations)
-        + all_label_annotations
         + [
             dict(
                 text="Year",
-                x=0.5, y=-0.05,
+                x=0.5, y=-0.06,
                 xref="paper", yref="paper",
                 showarrow=False,
                 xanchor="center", yanchor="top",
@@ -343,7 +357,7 @@ def plot_regional(output_name: str):
         ],
     )
 
-    save(fig, output_name, width=1700, height=800)
+    save(fig, output_name, width=1700, height=900)
 
 
 plot_global("fig2_demand_by_function_global")
