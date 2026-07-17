@@ -7,7 +7,7 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 
-CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-07-17--12-20-40.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-07-17--14-31-59.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
@@ -156,11 +156,13 @@ COLORS_REMIND = {
 COLOR_PALETTE = COLOR_PALETTE_1
 
 SSP_PICKLENAMES = {
-    "SSP1": "model_cement_SSP1_h12_2026-06-24--16-48-39.pickle",
-    "SSP2": "model_cement_SSP2_h12_2026-06-24--16-50-55.pickle",
-    "SSP3": "model_cement_SSP3_h12_2026-06-24--16-53-17.pickle",
-    "SSP4": "model_cement_SSP4_h12_2026-06-24--16-55-36.pickle",
-    "SSP5": "model_cement_SSP5_h12_2026-06-24--16-58-24.pickle",
+    "SSP1": "model_cement_SSP1_h12_2026-07-17--14-25-54.pickle",
+    "SSP2": "model_cement_SSP2_h12_2026-07-17--14-31-59.pickle",
+    "SSP3": "model_cement_SSP3_h12_2026-07-17--14-42-15.pickle",
+    "SSP4": "model_cement_SSP4_h12_2026-07-17--14-48-32.pickle",
+    "SSP5": "model_cement_SSP5_h12_2026-07-17--14-55-06.pickle",
+    "SSP1_CE": "model_cement_SSP1_CE_h12_2026-07-17--15-02-04.pickle",
+    "SSP2_CE": "model_cement_SSP2_CE_h12_2026-07-17--15-11-50.pickle",
 }
 SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
 SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}
@@ -170,4 +172,15 @@ SSP_COLORS = {
     "SSP3": "#D01C8B",  # magenta
     "SSP4": "#F1A340",  # orange
     "SSP5": "#762A83",  # purple
+    # Circular-economy variants share their parent SSP hue; distinguished by a dashed line.
+    "SSP1_CE": "#2166AC",  # blue (SSP1 variant)
+    "SSP2_CE": "#4DAC26",  # green (SSP2 variant)
+}
+
+# Line-dash style per scenario: CE variants dashed, base SSPs solid.
+SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SSP_PICKLENAMES}
+
+# Legend labels (CE variants read as "SSPx (CE)").
+SSP_LABELS = {
+    ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SSP_PICKLENAMES
 }

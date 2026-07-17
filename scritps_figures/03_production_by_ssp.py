@@ -1,8 +1,9 @@
-"""Figure 3: cement production under SSP1-5.
+"""Figure 3: cement production under SSP1-5 plus the two circular-economy (CE) variants.
 
 Line plot comparing total (or per-region) cement production from the top-down MFA
-for five SSP scenarios. A vertical dashed line marks the last historical year (2023).
-Produces a global figure and a 12-panel regional figure.
+for the five SSP scenarios and the SSP1_CE / SSP2_CE circular-economy variants
+(drawn dashed in their parent SSP colour). A vertical dashed line marks the last
+historical year (2023). Produces a global figure and a 12-panel regional figure.
 
 Run from the repository root:
     uv run python scritps_figures/03_production_by_ssp.py
@@ -19,6 +20,8 @@ from constants import (
     REGION_DISPLAY_NAMES,
     SSP_CACHE_DIRS,
     SSP_COLORS,
+    SSP_DASHES,
+    SSP_LABELS,
     SSP_SOURCE_PICKLES,
 )
 from helpers import load_mfas
@@ -49,8 +52,8 @@ def add_ssp_traces(fig, region=None, showlegend=True, row=None, col=None):
                 x=time,
                 y=production(combined_by_ssp[ssp], region=region).values,
                 mode="lines",
-                line={"color": SSP_COLORS[ssp], "width": 2},
-                name=ssp,
+                line={"color": SSP_COLORS[ssp], "width": 2, "dash": SSP_DASHES[ssp]},
+                name=SSP_LABELS[ssp],
                 legendgroup=ssp,
                 showlegend=showlegend,
             ),
