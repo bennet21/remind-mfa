@@ -7,7 +7,7 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 
-CEMENT_PICKLENAME = "model_cement_SSP2_cement_reconciliation_h12_2026-06-24--12-37-24.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-07-17--12-20-40.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks

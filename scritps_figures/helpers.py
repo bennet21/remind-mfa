@@ -30,6 +30,7 @@ def cache_paths(cache_dir: Path) -> dict[str, Path]:
     return {
         "combined": cache_dir / "combined_mfa.pickle",
         "td": cache_dir / "td_mfa.pickle",
+        "bu": cache_dir / "bu_mfa.pickle",
     }
 
 
@@ -49,11 +50,13 @@ def load_model(source_pickle: Path) -> object:
 
 
 def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False) -> dict[str, object]:
-    """Load the two MFAs needed for figure 1, caching them next to the source pickle.
+    """Load the MFAs / stocks needed for the figures, caching them next to the source pickle.
 
     Returns a dict with:
     - "combined": reconciled bottom-up / combined MFA (carries the Structure dimension `b`)
     - "td": pre-reconciliation top-down future MFA
+    - "bu": pre-reconciliation bottom-up MFA; its `stocks["bu_in_use"]` is the pure bottom-up
+      concrete stock (incl. hibernating stock), dims (t, r, s, f, b)
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -73,6 +76,7 @@ def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False)
     mfas = {
         "combined": model.bu_mfa_reconciled,
         "td": model.td_mfa,
+        "bu": model.bu_mfa,
     }
 
     for label, path in paths.items():
