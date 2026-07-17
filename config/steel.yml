@@ -4,7 +4,7 @@ input:
   force_extract_tgz: False
   scenarios_path: 'config/scenarios'
   input_data_path: '../remind_mfa_data/'
-  input_data_revision: '1.5.0'
+  input_data_revision: '1.6.0'
   region_mapping: 'h12'
 
 model_switches:
@@ -15,6 +15,9 @@ model_switches:
   regress_over: loggdppc
   lifetime_model_name: 'LogNormalLifetime'
   do_stock_extrapolation_by_category: True
+  parameter_extrapolation:
+    lifetime_mean: {blend: poly_mix}
+    lifetime_std: {blend: poly_mix}
 
 visualization:
   do_visualize: True
@@ -67,5 +70,3 @@ export:
   docs:
     do_export: False
     path: 'docs/steel'
-  parameter_plots:
-    do_export: False
