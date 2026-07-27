@@ -16,7 +16,6 @@ from remind_mfa.common.common_definition import get_definition, RemindMFADefinit
 from remind_mfa.common.trade import TradeSet
 from remind_mfa.common.parameter_extrapolation import ParameterExtrapolationManager
 from remind_mfa.common.data_transformations import Bound, BoundList
-from remind_mfa.common.data_blending import blend
 from remind_mfa.common.stock_extrapolation import StockExtrapolation
 from remind_mfa.common.helpers import RegressOverModes
 
@@ -58,6 +57,7 @@ class CommonModel:
         # snapshot parameters before extrapolation, then extend them into the future
         self.historic_parameters = copy.deepcopy(self.parameters)
         self.extrapolate_parameters()
+        self.check_parameters()
 
         stock_projection = self.get_long_term_stock()
 
@@ -140,7 +140,7 @@ class CommonModel:
     def extrapolate_parameters(self):
         """Extend parameters into the future, applying scenario targets and factors."""
         self.parameters = ParameterExtrapolationManager(
-            self.cfg, self.dims["h"], self.dims["t"]
+            self.dims["h"], self.dims["t"]
         ).apply_prm_extrapolation(self.parameters, self.scenario_parameters)
 
     def transfer_historic_parameters(self):
@@ -284,30 +284,7 @@ class CommonModel:
         )  # to be used in visualization of extrapolation functions
         long_term_stock = self.stock_handler.stocks * self.sector_specific_sat_level
 
-        self.apply_scenario_factor(array=long_term_stock, scen_prm_name="stock_factor")
-
         return long_term_stock
-
-    def apply_scenario_factor(self, array: fd.FlodymArray, scen_prm_name: str) -> fd.FlodymArray:
-        target_dims = array.dims.union_with(self.dims["t"])
-        if isinstance(self.scenario_parameters[scen_prm_name], fd.FlodymArray):
-            if any(
-                l not in array.dims.letters
-                for l in self.scenario_parameters[scen_prm_name].dims.letters
-            ):
-                raise ValueError(
-                    f"Dimensions of scenario parameter {scen_prm_name} must also be present in the base parameter."
-                )
-
-        factor = blend(
-            target_dims=target_dims,
-            y_lower=1,
-            y_upper=self.scenario_parameters[scen_prm_name],
-            x="t",
-            x_lower=self.dims["h"].items[-1],
-            x_upper=self.scenario_parameters[f"{scen_prm_name}_year"],
-        )
-        array[...] *= factor
 
     def lifetime_limit(self):
         """Effective lifetime when saturation level is reached.
