@@ -55,8 +55,8 @@ def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False)
     Returns a dict with:
     - "combined": reconciled bottom-up / combined MFA (carries the Structure dimension `b`)
     - "td": pre-reconciliation top-down future MFA
-    - "bu": pre-reconciliation bottom-up MFA; its `stocks["bu_in_use"]` is the pure bottom-up
-      concrete stock (incl. hibernating stock), dims (t, r, s, f, b)
+    - "bu": pre-reconciliation bottom-up concrete stock array (`FlodymArray`, not an MFA):
+      the pure bottom-up concrete in-use stock incl. hibernating stock, dims (t, r, s, f, b)
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -76,7 +76,7 @@ def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False)
     mfas = {
         "combined": model.bu_mfa_reconciled,
         "td": model.td_mfa,
-        "bu": model.bu_mfa,
+        "bu": model.bu_stock,
     }
 
     for label, path in paths.items():

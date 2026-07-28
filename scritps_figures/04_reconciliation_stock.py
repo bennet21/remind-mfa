@@ -12,7 +12,7 @@ produced: absolute (t/capita) and relative (bottom-up = 100%).
 
 Data sources (all reduced to cement-in-concrete by region and stock type at the last historic year):
 - bottom-up: pure bottom-up in-use concrete stock incl. hibernating stock
-  (`bu_mfa.stocks["bu_in_use"]`), converted to cement via `cement_ratio`
+  (`model.bu_stock`, a stock array with dims t,r,s,f,b), converted to cement via `cement_ratio`
 - reconciled: reconciled combined MFA in-use stock
 - top-down: pre-reconciliation top-down MFA in-use stock
 
@@ -67,8 +67,9 @@ def by_stocktype(arr):
 
 
 # Pure bottom-up concrete stock (incl. hibernating), converted to cement-in-concrete.
-bu_concrete = bu.stocks["bu_in_use"].stock[{"t": H}]
-bu_cement_ratio = bu.parameters["cement_ratio"][{"m": "concrete"}]
+# `bu` is the bu_in_use stock array (dims t,r,s,f,b); cement_ratio lives on the top-down MFA.
+bu_concrete = bu[{"t": H}]
+bu_cement_ratio = td.parameters["cement_ratio"][{"m": "concrete"}]
 
 # Cement-in-concrete stock by region and stock type at the last historic year, per estimate.
 STOCK = {
