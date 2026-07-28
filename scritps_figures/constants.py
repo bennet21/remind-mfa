@@ -6,6 +6,7 @@ PATH_CEMENT = Path("data/cement/output/export/pickle")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
+REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
 CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-07-28--08-50-43.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
@@ -181,6 +182,4 @@ SSP_COLORS = {
 SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SSP_PICKLENAMES}
 
 # Legend labels (CE variants read as "SSPx (CE)").
-SSP_LABELS = {
-    ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SSP_PICKLENAMES
-}
+SSP_LABELS = {ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SSP_PICKLENAMES}
