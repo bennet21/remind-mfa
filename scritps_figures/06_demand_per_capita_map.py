@@ -1,10 +1,11 @@
-"""Figure 6: world map of cumulative future cement demand per capita under SSP2.
+"""Figure 6: world maps of cumulative future cement demand under SSP2.
 
-Choropleth map in which each country is shaded by the cumulative future per-capita cement
-demand of its REMIND H12 region: for every future year (2024-2100), the regional reconciled
-(combined) cement demand is divided by that year's population, and the annual per-capita
-values are summed. Countries are assigned to regions via the REMIND H12 regionmapping
-(`scritps_figures/h12.csv`). Saved as PNG in `data/cement/output/figures`.
+Choropleth maps in which each country is shaded by the cumulative future cement demand of its
+REMIND H12 region over 2024-2100, from the reconciled (combined) MFA. Two variants are produced:
+per-capita demand (annual regional demand divided by that year's population, summed over the
+future years; t/cap) and total demand (annual regional demand summed over the future years; Gt).
+Countries are assigned to regions via the REMIND H12 regionmapping (`scritps_figures/h12.csv`).
+Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
     uv run python scritps_figures/06_demand_per_capita_map.py
@@ -24,26 +25,37 @@ from constants import (
 )
 from helpers import load_mfas
 
-COLORBAR_TITLE = "Cumulative cement demand<br>2024–2100 (t per capita)"
+GT_PER_T = 1e-9
 
 mfas = load_mfas(SSP_SOURCE_PICKLES["SSP2"], SSP_CACHE_DIRS["SSP2"])
 combined = mfas["combined"]
 td = mfas["td"]
 
 
+def regional_demand():
+    """Combined cement demand (t) with dims (t, r)."""
+    return combined.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
+
+
+def sum_future_years(array) -> dict[str, float]:
+    """Sum a (t, r) flodym array over the future years; return one value per region."""
+    years = np.array(array.dims["t"].items)
+    future = years > LAST_HISTORICAL_YEAR
+    cumulative = array.values[future].sum(axis=0)
+    return {str(region): value for region, value in zip(array.dims["r"].items, cumulative)}
+
+
 def cumulative_per_capita_demand() -> dict[str, float]:
     """Sum of annual per-capita cement demand (t/cap) over the future years, per region."""
-    demand = combined.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
-    population = td.parameters["population"]
-    per_capita = demand / population
-
-    years = np.array(per_capita.dims["t"].items)
-    future = years > LAST_HISTORICAL_YEAR
-    cumulative = per_capita.values[future].sum(axis=0)
-    return {str(region): value for region, value in zip(per_capita.dims["r"].items, cumulative)}
+    return sum_future_years(regional_demand() / td.parameters["population"])
 
 
-def country_table(region_values: dict[str, float]) -> pd.DataFrame:
+def cumulative_total_demand() -> dict[str, float]:
+    """Cumulative cement demand (Gt) over the future years, per region."""
+    return sum_future_years(regional_demand() * GT_PER_T)
+
+
+def country_table(region_values: dict[str, float], unit: str) -> pd.DataFrame:
     mapping = pd.read_csv(REGIONMAPPING_CSV, sep=";")
     mapping = mapping[mapping["CountryCode"] != "ATA"]  # Antarctica (nominally LAM)
     mapping["value"] = mapping["RegionCode"].map(region_values)
@@ -54,7 +66,7 @@ def country_table(region_values: dict[str, float]) -> pd.DataFrame:
         + mapping["RegionCode"]
         + ")<br>"
         + mapping["value"].round(1).astype(str)
-        + " t per capita"
+        + f" {unit}"
     )
     return mapping
 
@@ -66,11 +78,10 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot_map(output_name: str):
-    region_values = cumulative_per_capita_demand()
-    countries = country_table(region_values)
+def plot_map(region_values: dict[str, float], colorbar_title: str, unit: str, output_name: str):
+    countries = country_table(region_values, unit)
 
-    print("Cumulative per-capita cement demand 2024-2100 (t/cap) by region:")
+    print(f"Cumulative cement demand 2024-2100 ({unit}) by region:")
     for region, value in sorted(region_values.items(), key=lambda item: -item[1]):
         print(f"  {region}: {value:.1f}")
 
@@ -84,7 +95,7 @@ def plot_map(output_name: str):
             marker_line_color="white",
             marker_line_width=0.3,
             colorbar={
-                "title": {"text": COLORBAR_TITLE, "font": {"size": 13}},
+                "title": {"text": colorbar_title, "font": {"size": 13}},
                 "thickness": 15,
                 "len": 0.7,
             },
@@ -108,6 +119,17 @@ def plot_map(output_name: str):
     save(fig, output_name, width=1200, height=650)
 
 
-plot_map("fig6_demand_per_capita_map")
+plot_map(
+    cumulative_per_capita_demand(),
+    colorbar_title="Cumulative cement demand<br>2024–2100 (t per capita)",
+    unit="t per capita",
+    output_name="fig6_demand_per_capita_map",
+)
+plot_map(
+    cumulative_total_demand(),
+    colorbar_title="Cumulative cement demand<br>2024–2100 (Gt)",
+    unit="Gt",
+    output_name="fig6_demand_total_map",
+)
 
 print("END")
