@@ -151,19 +151,36 @@ def load_or_compute_impacts(analyzer, td_fn, bu_fn, cache_key: str):
     return bu_impact, td_impact
 
 
-def group_small_impacts(adjustments, labels, min_pct, total_gap):
-    """Group steps whose |contribution| is below min_pct of the initial gap into a single 'Other'."""
+def compute_keep_labels(panels_side, min_pct):
+    """Return the set of labels to keep separate across all panels of one side.
+
+    A label is kept if its |contribution| breaches min_pct of the total_gap in ANY panel; labels
+    below the threshold in every panel are the ones collapsed into 'Other'.
+
+    Args:
+        panels_side: list of (values, labels, total_gap) tuples, one per panel.
+        min_pct: threshold percentage of the panel's total_gap.
+    """
+    keep = set()
+    for values, labels, total_gap in panels_side:
+        for val, label in zip(values, labels):
+            if abs(val) / total_gap * 100 >= min_pct:
+                keep.add(label)
+    return keep
+
+
+def group_by_keep_set(adjustments, labels, keep_labels):
+    """Keep labels in keep_labels; collapse the rest into a single trailing 'Other'."""
     grouped_adj, grouped_labels = [], []
     other_sum = 0.0
     n_other = 0
     for val, label in zip(adjustments, labels):
-        pct = abs(val) / total_gap * 100
-        if pct < min_pct:
-            other_sum += val
-            n_other += 1
-        else:
+        if label in keep_labels:
             grouped_adj.append(val)
             grouped_labels.append(label)
+        else:
+            other_sum += val
+            n_other += 1
     if n_other > 0:
         grouped_adj.append(other_sum)
         grouped_labels.append("Other")
@@ -321,7 +338,9 @@ def make_figure(analyzer, pr, population, region, region_label, output_name):
         subplot_titles=[STOCK_TYPE_TITLES[st] for st in STOCK_TYPES],
     )
 
-    for row, stock_type in enumerate(STOCK_TYPES, start=1):
+    # Pass 1: gather impacts and endpoint values for every stock type.
+    gathered = []
+    for stock_type in STOCK_TYPES:
         region_key = region if region is not None else "global"
         stock_key = stock_type if stock_type is not None else "combined"
         cache_key = f"{region_key}_{stock_key}"
@@ -339,16 +358,37 @@ def make_figure(analyzer, pr, population, region, region_label, output_name):
             f"| reconciled gap = {abs(end_bu - end_td):.4f}"
         )
 
-        total_gap = abs(start_td - start_bu) or 1e-9
-        bu_adj, bu_labels = group_small_impacts(
-            bu_impact.values.tolist(), list(bu_impact.dims["p"].items), MIN_PCT, total_gap
-        )
-        td_adj, td_labels = group_small_impacts(
-            td_impact.values.tolist(), list(td_impact.dims["p"].items), MIN_PCT, total_gap
+        gathered.append(
+            {
+                "start_bu": start_bu,
+                "end_bu": end_bu,
+                "start_td": start_td,
+                "end_td": end_td,
+                "total_gap": abs(start_td - start_bu) or 1e-9,
+                "bu_vals": bu_impact.values.tolist(),
+                "bu_labels_all": list(bu_impact.dims["p"].items),
+                "td_vals": td_impact.values.tolist(),
+                "td_labels_all": list(td_impact.dims["p"].items),
+            }
         )
 
+    # Shared keep-sets: a parameter is kept separate if it breaches MIN_PCT in ANY panel, so the
+    # three panels collapse the same parameters into "Other" and share one x-axis.
+    bu_keep = compute_keep_labels(
+        [(d["bu_vals"], d["bu_labels_all"], d["total_gap"]) for d in gathered], MIN_PCT
+    )
+    td_keep = compute_keep_labels(
+        [(d["td_vals"], d["td_labels_all"], d["total_gap"]) for d in gathered], MIN_PCT
+    )
+
+    # Pass 2: group with the shared keep-sets and build each panel.
+    for row, d in enumerate(gathered, start=1):
+        bu_adj, bu_labels = group_by_keep_set(d["bu_vals"], d["bu_labels_all"], bu_keep)
+        td_adj, td_labels = group_by_keep_set(d["td_vals"], d["td_labels_all"], td_keep)
+
         panel = build_waterfall_bars(
-            start_bu, end_bu, end_td, start_td, bu_adj, bu_labels, td_adj, td_labels
+            d["start_bu"], d["end_bu"], d["end_td"], d["start_td"],
+            bu_adj, bu_labels, td_adj, td_labels,
         )
         add_panel(fig, panel, row)
 
