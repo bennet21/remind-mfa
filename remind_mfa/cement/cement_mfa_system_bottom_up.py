@@ -140,22 +140,6 @@ class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
         total_concrete = concrete / (1.0 - prm["hibernating_stock_share"])
         return total_concrete
 
-    @staticmethod
-    def compute_bottom_up_concrete_stock(
-        floorspace: fd.FlodymArray, prm: dict[str, fd.FlodymArray]
-    ) -> fd.FlodymArray:
-        """Concrete in-use stock from a floorspace quantity, resolved by
-        building function (f) and structure (b).
-        """
-        function_split = prm["function_buildings_split"]
-        structure_split = prm["structure_buildings_split"]
-        function_split = function_split.get_shares_over(("f",))
-        structure_split = structure_split.get_shares_over(("b",))
-        concrete = floorspace * function_split * structure_split * prm["concrete_building_mi"]
-        # scale up building stock to account for hibernating (unused) stock
-        total_concrete_stock = concrete / (1.0 - prm["hibernating_stock_share"])
-        return total_concrete_stock
-
     @property
     def reduced_dim_mask(self):
         return {
