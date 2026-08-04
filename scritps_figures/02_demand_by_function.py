@@ -46,7 +46,7 @@ td = mfas["td"]
 
 time = combined.stocks["in_use"].stock.dims["t"].items
 regions = combined.stocks["in_use"].inflow.dims["r"].items
-_all_structures = combined.stocks["in_use"].inflow.dims["b"].items
+_all_structures = combined.stocks["in_use"].inflow.dims["s"].items
 _buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
 
 RES_COLOR = STOCK_TYPE_BASE_COLORS["Res"]
@@ -56,7 +56,7 @@ _res_shade_levels = shade_levels(2)
 
 SERIES = [
     {
-        "selections": [{"s": "Res", "m": "concrete", "f": "RS"}],
+        "selections": [{"e": "RS", "m": "concrete"}],
         "color": shade(RES_COLOR, _res_shade_levels[0]),
         "name": "Single-family res. buildings",
         "group": "res",
@@ -65,7 +65,7 @@ SERIES = [
         "shade_center": _res_shade_levels[0],
     },
     {
-        "selections": [{"s": "Res", "m": "concrete", "f": "RM"}],
+        "selections": [{"e": "RM", "m": "concrete"}],
         "color": shade(RES_COLOR, _res_shade_levels[1]),
         "name": "Multi-family res. buildings",
         "group": "res",
@@ -74,7 +74,7 @@ SERIES = [
         "shade_center": _res_shade_levels[1],
     },
     {
-        "selections": [{"s": "Com", "m": "concrete"}],
+        "selections": [{"e": "Com", "m": "concrete"}],
         "color": COM_COLOR,
         "name": "Commercial",
         "group": "com",
@@ -83,21 +83,22 @@ SERIES = [
         "shade_center": 0.0,
     },
     {
-        "selections": [{"s": "Ind"}],
+        "selections": [{"e": "Ind"}],
         "color": OTHER_IND_COLOR,
         "name": OTHER_IND_NAME,
         "group": "other",
         "grouptitle": "Other cement use",
     },
     {
-        "selections": [{"s": "Civ"}],
+        "selections": [{"e": "Civ"}],
         "color": OTHER_CIV_COLOR,
         "name": OTHER_CIV_NAME,
         "group": "other",
         "grouptitle": None,
     },
     {
-        "selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],
+        "selections": [{"m": "mortar", "e": "RS"}, {"m": "mortar", "e": "RM"},
+                       {"m": "mortar", "e": "Com"}],
         "color": OTHER_RES_COM_MORTAR_COLOR,
         "name": OTHER_RES_COM_MORTAR_NAME,
         "group": "other",
@@ -191,7 +192,7 @@ def _add_series_traces(fig, stackgroup, region=None, row=None, col=None):
         if "base_hex" in s:
             shade_ts = _structure_shade_levels(s["shade_center"], n=len(_buildings))
             for b, shade_t in zip(_buildings, shade_ts):
-                sub_sel = [{**sel, "b": b} for sel in s["selections"]]
+                sub_sel = [{**sel, "s": b} for sel in s["selections"]]
                 sub_color = shade(s["base_hex"], shade_t)
                 fig.add_trace(
                     go.Scatter(

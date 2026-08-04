@@ -1,8 +1,8 @@
 """Figure 1: combined-MFA cement demand stacked by building structure and function.
 
 Stacked areas show the reconciled (combined) cement demand split over the building-structure
-dimension (`b`: Concrete / Masonry / Timber / Steel), with each structure further subdivided over
-the building-function dimension (`f`: single-family res. / multi-family res. / commercial) via
+dimension (`s`: Concrete / Masonry / Timber / Steel), with each structure further subdivided over
+the building-good dimension (`e`: single-family res. / multi-family res. / commercial) via
 shading. A separate grey "Other" band holds non-building (industrial + civil) cement. On top, a
 black line shows the pre-reconciliation top-down total cement demand. Produces a global figure and
 a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`.
@@ -47,8 +47,8 @@ td = mfas["td"]
 
 time = combined.stocks["in_use"].stock.dims["t"].items
 regions = combined.stocks["in_use"].inflow.dims["r"].items
-_all_structures = combined.stocks["in_use"].inflow.dims["b"].items
-_all_functions = combined.stocks["in_use"].inflow.dims["f"].items
+_all_structures = combined.stocks["in_use"].inflow.dims["s"].items
+_all_functions = combined.stocks["in_use"].inflow.dims["e"].items
 
 _buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
 _functions = [f for f in _all_functions if str(f) in FUNCTION_DISPLAY_NAMES]
@@ -67,7 +67,7 @@ def build_series() -> list[dict]:
         for f, t in zip(_functions, levels):
             series.append(
                 {
-                    "selections": [{"b": b, "f": f}],
+                    "selections": [{"s": b, "e": f}],
                     "color": shade(base, t),
                     "name": FUNCTION_DISPLAY_NAMES.get(str(f), str(f)),
                     "group": str(b),
@@ -77,13 +77,14 @@ def build_series() -> list[dict]:
             )
 
     # Three grey sub-categories for non-building cement, stacked on top.
-    series.append({"selections": [{"s": "Ind"}], "color": OTHER_IND_COLOR,
+    series.append({"selections": [{"e": "Ind"}], "color": OTHER_IND_COLOR,
                    "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other cement use",
                    "legendrank": 2})
-    series.append({"selections": [{"s": "Civ"}], "color": OTHER_CIV_COLOR,
+    series.append({"selections": [{"e": "Civ"}], "color": OTHER_CIV_COLOR,
                    "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None,
                    "legendrank": 2})
-    series.append({"selections": [{"s": "Res", "m": "mortar"}, {"s": "Com", "m": "mortar"}],
+    series.append({"selections": [{"m": "mortar", "e": "RS"}, {"m": "mortar", "e": "RM"},
+                                  {"m": "mortar", "e": "Com"}],
                    "color": OTHER_RES_COM_MORTAR_COLOR,
                    "name": OTHER_RES_COM_MORTAR_NAME, "group": "other", "grouptitle": None,
                    "legendrank": 2})
@@ -123,18 +124,6 @@ def save(fig, output_name: str, width: int, height: int):
 def plot_global(output_name: str):
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Scatter(
-            x=time,
-            y=td_demand({}).values,
-            mode="lines",
-            line={"color": TD_LINE_COLOR, "width": 2},
-            name=TD_LINE_NAME,
-            legendgroup="td",
-            legendrank=1,
-        )
-    )
-
     for s in SERIES:
         fig.add_trace(
             go.Scatter(
@@ -150,6 +139,21 @@ def plot_global(output_name: str):
                 legendrank=s["legendrank"],
             )
         )
+
+    # Draw the top-down line last so it stays visible on top of the stacked fills. Because the
+    # combined demand decomposition sums to the same total as the top-down demand, this line
+    # traces the top of the stack.
+    fig.add_trace(
+        go.Scatter(
+            x=time,
+            y=td_demand({}).values,
+            mode="lines",
+            line={"color": TD_LINE_COLOR, "width": 2},
+            name=TD_LINE_NAME,
+            legendgroup="td",
+            legendrank=1,
+        )
+    )
 
     fig.add_vline(
         x=LAST_HISTORICAL_YEAR,
@@ -188,21 +192,6 @@ def plot_regional(output_name: str):
         row = index // ncols + 1
         col = index % ncols + 1
 
-        fig.add_trace(
-            go.Scatter(
-                x=time,
-                y=td_demand({"r": region}).values,
-                mode="lines",
-                line={"color": TD_LINE_COLOR, "width": 1.5},
-                name=TD_LINE_NAME,
-                legendgroup="td",
-                legendrank=1,
-                showlegend=index == 0,
-            ),
-            row=row,
-            col=col,
-        )
-
         for s in SERIES:
             fig.add_trace(
                 go.Scatter(
@@ -221,6 +210,22 @@ def plot_regional(output_name: str):
                 row=row,
                 col=col,
             )
+
+        # top-down line last so it stays on top of the stacked fills
+        fig.add_trace(
+            go.Scatter(
+                x=time,
+                y=td_demand({"r": region}).values,
+                mode="lines",
+                line={"color": TD_LINE_COLOR, "width": 1.5},
+                name=TD_LINE_NAME,
+                legendgroup="td",
+                legendrank=1,
+                showlegend=index == 0,
+            ),
+            row=row,
+            col=col,
+        )
 
         fig.add_vline(
             x=LAST_HISTORICAL_YEAR,

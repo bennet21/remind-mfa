@@ -12,7 +12,7 @@ produced: absolute (t/capita) and relative (bottom-up = 100%).
 
 Data sources (all reduced to cement-in-concrete by region and stock type at the last historic year):
 - bottom-up: pure bottom-up in-use concrete stock incl. hibernating stock
-  (`model.bu_stock`, a stock array with dims t,r,s,f,b), converted to cement via `cement_ratio`
+  (`model.bu_stock`, a stock array with dims t,r,b,s), converted to cement via `cement_ratio`
 - reconciled: reconciled combined MFA in-use stock
 - top-down: pre-reconciliation top-down MFA in-use stock
 
@@ -57,25 +57,44 @@ LEGEND_GREY = "#9a9a9a"
 mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
 td, recon, bu = mfas["td"], mfas["combined"], mfas["bu"]
 
+# store information on which dimensions are subcategories of others.
+GOOD_ITEMS = {
+    "g": {"Res": ["Res"], "Com": ["Com"]},
+    "e": {"Res": ["RS", "RM"], "Com": ["Com"]},
+    "b": {"Res": ["RS", "RM"], "Com": ["Com"]},
+}
 
-def by_stocktype(arr):
-    """Reduce a stock array to (r, s), summing the building dimensions (f, b) if present."""
-    for extra in ("f", "b"):
-        if extra in arr.dims.letters:
-            arr = arr.sum_over(extra)
-    return arr
+
+def _good_letter(arr) -> str:
+    for letter in ("g", "e", "b"):
+        if letter in arr.dims.letters:
+            return letter
+    raise ValueError(f"no good dimension in {tuple(arr.dims.letters)}")
+
+
+def by_stocktype(arr, stocktype: str):
+    """Reduce a stock array to (r,) for the given stock type (Res/Com): sum the good items
+    that make up that type on whichever good dimension the array carries, then sum the
+    structure dimension `s` if present."""
+    letter = _good_letter(arr)
+    parts = [arr[{letter: item}] for item in GOOD_ITEMS[letter][stocktype]]
+    reduced = parts[0]
+    for part in parts[1:]:
+        reduced = reduced + part
+    if "s" in reduced.dims.letters:
+        reduced = reduced.sum_over("s")
+    return reduced
 
 
 # Pure bottom-up concrete stock (incl. hibernating), converted to cement-in-concrete.
-# `bu` is the bu_in_use stock array (dims t,r,s,f,b); cement_ratio lives on the top-down MFA.
-bu_concrete = bu[{"t": H}]
+# `bu` is the bu_in_use stock array (dims t,r,b,s); cement_ratio (dims r,m) lives on the top-down MFA.
 bu_cement_ratio = td.parameters["cement_ratio"][{"m": "concrete"}]
 
-# Cement-in-concrete stock by region and stock type at the last historic year, per estimate.
+# Cement-in-concrete stock at the last historic year, per estimate (reduced to (r,) per type below).
 STOCK = {
-    "BU": by_stocktype(bu_concrete) * bu_cement_ratio,
-    "reconciled": by_stocktype(recon.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}]),
-    "TD": by_stocktype(td.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}]),
+    "BU": bu[{"t": H}] * bu_cement_ratio,
+    "reconciled": recon.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}],
+    "TD": td.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}],
 }
 POP = td.parameters["population"]
 regions = list(td.stocks["in_use"].stock.dims["r"].items)
@@ -84,7 +103,7 @@ x_labels = [REGION_DISPLAY_NAMES.get(str(r), str(r)) for r in regions]
 
 # --- per-column value accessors: regional (per region) and global (summed over regions) ---
 def regional_stock(estimate: str, key, stocktype: str) -> float:
-    return STOCK[estimate][{"r": key, "s": stocktype}].values.item()
+    return by_stocktype(STOCK[estimate], stocktype)[{"r": key}].values.item()
 
 
 def regional_pop(key) -> float:
@@ -92,7 +111,7 @@ def regional_pop(key) -> float:
 
 
 def global_stock(estimate: str, key, stocktype: str) -> float:
-    return STOCK[estimate][{"s": stocktype}].sum_over("r").values.item()
+    return by_stocktype(STOCK[estimate], stocktype).sum_over("r").values.item()
 
 
 def global_pop(key) -> float:

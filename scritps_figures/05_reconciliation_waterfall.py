@@ -40,7 +40,6 @@ from remind_mfa.cement.cement_parameter_reconciliation import (
     CementParameterReconciliation,
     AnalyzeParameterReconciliation,
 )
-from remind_mfa.cement.cement_mfa_system_bottom_up import REDUCED_STOCK_TYPE
 
 # --- configuration -----------------------------------------------------------------------------
 MODE = "global"  # "global" | "regional"
@@ -60,21 +59,26 @@ PATTERN_KWARGS = {"fgcolor": "white", "size": 7, "solidity": 0.4}
 # Analysis layer (ported from the old parameter-reconciliation-paper waterfall script)
 # =================================================================================================
 class ReducingDict:
-    """Lazy wrapper that reduces s->u on key access, forwarding __getitem__ to the underlying dict.
+    """Lazy wrapper that reduces the good dimension `g` (Res/Com/Ind/Civ) to the reconciliation's
+    common good `u` (Res/Com) on key access, forwarding __getitem__ to the underlying dict.
 
-    This ensures that DependencyTracker (used by AnalyzeParameterReconciliation to spy on which
+    This mirrors the good-dimension reduction in `CementParameterReconciliation.reduce_prm`, but
+    NOT its floorspace time-slice: `AnalyzeParameterReconciliation.__init__` already slices
+    floorspace to the reconciliation year, so applying the slice again here would fail.
+
+    It also ensures that DependencyTracker (used by AnalyzeParameterReconciliation to spy on which
     parameters are actually accessed) only records the keys the calc function uses, not all keys
     iterated up-front.
     """
 
-    def __init__(self, prms, reduced_stock_type):
+    def __init__(self, prms, pr):
         self._prms = prms
-        self._rsd = reduced_stock_type
+        self._pr = pr
 
     def __getitem__(self, key):
         val = self._prms[key]  # triggers DependencyTracker.__getitem__ when spying
-        if "s" in val.dims.letters:
-            val = val[{"s": self._rsd}]
+        if "g" in val.dims.letters:
+            val = val[{"g": self._pr.reduced_good}]
         return val
 
     def __iter__(self):
@@ -118,14 +122,14 @@ def make_fns(pr, population, region, stock_type):
         return arr.sum_to(fd.DimensionSet(dim_list=[]))
 
     def td_fn(prms):
-        rd = ReducingDict(prms, REDUCED_STOCK_TYPE)
+        rd = ReducingDict(prms, pr)
         concrete_stock = pr.calc_top_down_stock(rd)
         cement_in_concrete = concrete_stock * rd["cement_ratio"][CONCRETE_MASK]
         return _select(cement_in_concrete) / pop_scalar
 
     def bu_fn(prms):
-        rd = ReducingDict(prms, REDUCED_STOCK_TYPE)
-        concrete_stock = CementParameterReconciliation.calc_bottom_up_stock(rd)
+        rd = ReducingDict(prms, pr)
+        concrete_stock = pr.calc_bottom_up_stock(rd)
         cement_in_concrete = concrete_stock * rd["cement_ratio"][CONCRETE_MASK]
         return _select(cement_in_concrete) / pop_scalar
 

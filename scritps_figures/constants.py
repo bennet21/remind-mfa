@@ -1,33 +1,32 @@
 from pathlib import Path
 
-import flodym as fd
-
 PATH_CEMENT = Path("data/cement/output/export/pickle")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
-CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-07-28--08-50-43.pickle"
+CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-08-04--09-27-35.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
 CEMENT_MASK = {"k": "cement"}
 CONCRETE_MASK = {"m": "concrete"}
-STOCK_TYPE_DIM = fd.Dimension(name="Reduced Stock Type", letter="u", items=["Res", "Com"])
-STOCK_TYPE_MASK = {"s": STOCK_TYPE_DIM}
-TOTAL_MASK = {**CEMENT_MASK, **CONCRETE_MASK, **STOCK_TYPE_MASK}
 
 STRUCTURE_DISPLAY_NAMES = {
     "C": "Concrete buildings",
     "M": "Masonry buildings",
     "T": "Timber buildings",
     "S": "Steel buildings",
-    "nan": "Other (industrial, civil, masonry)",
+    "U": "Unspecified",
 }
 
-# Structure items treated as the non-building "Other" category (stacked first, split into sub-categories).
-OTHER_STRUCTURE_KEYS = {"nan", "N/A"}
+# Structure item(s) excluded from the per-structure building bands and shown as the "Other" band
+# instead. "U" (Unspecified structure) carries the nonzero non-building cement (industrial + civil
+# goods, and all mortar). Building goods (RS/RM/Com) may also take structure "U", but their material
+# intensity there is zero, so they contribute no concrete and the C/M/T/S bands capture all building
+# concrete.
+OTHER_STRUCTURE_KEYS = {"U"}
 
 # Three grey shades for the Other sub-categories (darkest -> lightest), kept close together
 # so they recede visually relative to the saturated building-use colors.
@@ -157,13 +156,13 @@ COLORS_REMIND = {
 COLOR_PALETTE = COLOR_PALETTE_1
 
 SSP_PICKLENAMES = {
-    "SSP1": "model_cement_SSP1_h12_2026-07-28--08-56-23.pickle",
-    "SSP2": "model_cement_SSP2_h12_2026-07-28--08-50-43.pickle",
-    "SSP3": "model_cement_SSP3_h12_2026-07-28--08-57-00.pickle",
-    "SSP4": "model_cement_SSP4_h12_2026-07-28--08-57-37.pickle",
-    "SSP5": "model_cement_SSP5_h12_2026-07-28--08-58-14.pickle",
-    "SSP1_CE": "model_cement_SSP1_CE_h12_2026-07-28--08-58-50.pickle",
-    "SSP2_CE": "model_cement_SSP2_CE_h12_2026-07-28--08-59-25.pickle",
+    "SSP1": "model_cement_SSP1_h12_2026-08-04--09-26-31.pickle",
+    "SSP2": "model_cement_SSP2_h12_2026-08-04--09-27-35.pickle",
+    "SSP3": "model_cement_SSP3_h12_2026-08-04--09-28-08.pickle",
+    "SSP4": "model_cement_SSP4_h12_2026-08-04--09-28-29.pickle",
+    "SSP5": "model_cement_SSP5_h12_2026-08-04--09-28-47.pickle",
+    "SSP1_CE": "model_cement_SSP1_CE_h12_2026-08-04--09-29-04.pickle",
+    "SSP2_CE": "model_cement_SSP2_CE_h12_2026-08-04--09-29-24.pickle",
 }
 SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
 SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}
