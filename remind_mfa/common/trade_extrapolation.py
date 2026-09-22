@@ -28,6 +28,9 @@ class TradeExtrapolator(RemindMFABaseModel):
     """
     _eps: float = 1e-6
     """Small value to avoid division by zero and to check for near-zero values in the data."""
+    transition_years: int = 10
+    """Number of years over which the mismatch between the last historical trade value and the
+    average-anchored extrapolation is faded out (see blend_to_historic)."""
 
     @model_validator(mode="after")
     def validate_inputs(self):
@@ -140,8 +143,6 @@ class TradeExtrapolator(RemindMFABaseModel):
             dom_0=self.scaler_first_0,
             dom=self.scaler_first,
         )
-        # make sure historical years equal historical data
-        self.future_first[self.id_hist] = self.historic_first
 
     def remove_stopover(self):
         """Split off "stopover" (re-export) trade before scaling.
@@ -179,7 +180,7 @@ class TradeExtrapolator(RemindMFABaseModel):
         global_scaler_0 = self.scaler_first_0.sum_over("r").maximum(self._eps)
         stopover_trade = self.stopover_0 * (global_scaler / global_scaler_0)
         self.future_first[...] += stopover_trade
-        self.future_first[self.id_hist] = self.historic_first
+        self.blend_to_historic(self.future_first, self.historic_first)
         return stopover_trade
 
     def scale_second(self, stopover_trade: fd.FlodymArray):
@@ -191,21 +192,50 @@ class TradeExtrapolator(RemindMFABaseModel):
         historic_second_0.
         """
         self.future_second[...] = self.historic_second_0
-        self.future_second[self.id_hist] = self.historic_second
         for _ in range(3):
+            # overwrite historical years at the start of each iteration, so that the loop ends
+            # with the pure scaled trajectory, which blend_to_historic needs at the last
+            # historical year
+            self.future_second[self.id_hist] = self.historic_second
+            # the boundary fade on future_first (see blend_to_historic) can transiently push
+            # this derived scaler below zero in single regions/years while future_second is
+            # still average-anchored; clamp, the final balance() resolves such excess trade
             self.scaler_second = (
                 self.scaler_first - self.future_first + self.future_second + stopover_trade
-            )
+            ).maximum(0.0)
             self.future_second[...] = self.scaling(
                 trd_0=self.historic_second_0,
                 dom_0=self.scaler_second_0,
                 dom=self.scaler_second,
                 reduced_linear=False,
             )
-            self.future_second[self.id_hist] = self.historic_second
 
         self.future_second[...] += stopover_trade
-        self.future_second[self.id_hist] = self.historic_second
+        self.blend_to_historic(self.future_second, self.historic_second)
+
+    def blend_to_historic(self, future: fd.FlodymArray, historic: fd.FlodymArray):
+        """Overwrite historical years with historical data and smooth the transition to the
+        extrapolation: since the extrapolation is anchored to a recent historical average
+        (see get_recent_averages), it generally misses the last historical value, which would
+        create a step between the last historical and the first future year. The mismatch at
+        the last historical year is therefore added to the extrapolation as an offset fading
+        to zero over transition_years, so trade continues from the last historical value and
+        relaxes to the average-anchored trajectory.
+        """
+        last_h = historic.dims["h"].items[-1]
+        offset = historic[{"h": last_h}] - future[{"t": last_h}]
+        fading_offset = blend(
+            target_dims=future.dims,
+            y_lower=offset,
+            y_upper=0.0,
+            x="t",
+            x_lower=last_h,
+            x_upper=last_h + self.transition_years,
+            type="hermite",
+        )
+        # clamp to zero: a negative offset may exceed a small extrapolated trade flow
+        future[...] = (future + fading_offset).maximum(0.0)
+        future[self.id_hist] = historic
 
     def balance(self):
         """We balance global imports and exports to their hmean
