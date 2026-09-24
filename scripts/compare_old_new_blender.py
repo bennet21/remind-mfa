@@ -14,9 +14,9 @@ from pathlib import Path
 import flodym as fd
 import flodym.export as fde
 
-OLD_DIR = Path("data_out_compare/old")
-NEW_DIR = Path("data_out_compare/new")
-OUT_DIR = Path("data_out_compare/figures")
+OLD_DIR = Path("data_out/compare_c1_vs_c2_blender/old")
+NEW_DIR = Path("data_out/compare_c1_vs_c2_blender/new")
+OUT_DIR = Path("data_out/compare_c1_vs_c2_blender/figures")
 
 RUN_DIM = fd.Dimension(letter="X", name="Run", items=["old", "new"])
 
