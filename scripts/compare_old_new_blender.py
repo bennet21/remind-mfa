@@ -44,11 +44,20 @@ QUANTITY_BUILDERS = {
     },
 }
 
+COMPARISONS = {
+    "cement": ("regular", "cement"),
+    "steel": ("regular", "steel"),
+    "plastics": ("regular", "plastics"),
+    "cement_reconciliation": ("cement_reconciliation", "cement"),
+}
 
-def find_pickle(base_dir: Path, material: str) -> Path:
-    matches = sorted(base_dir.glob(f"*_{material}_*/model.pickle"))
+
+def find_pickle(base_dir: Path, prefix: str, material: str) -> Path:
+    matches = sorted(base_dir.glob(f"{prefix}_{material}_*/model.pickle"))
     if not matches:
-        raise FileNotFoundError(f"No model.pickle found for material={material!r} under {base_dir}")
+        raise FileNotFoundError(
+            f"No model.pickle found for prefix={prefix!r}, material={material!r} under {base_dir}"
+        )
     return matches[-1]
 
 
@@ -80,9 +89,10 @@ def make_figure(array: fd.FlodymArray, material: str, name: str, regional: bool,
 
 
 def main():
-    for material, build_quantities in QUANTITY_BUILDERS.items():
-        old_mfa = load_future_mfa(find_pickle(OLD_DIR, material))
-        new_mfa = load_future_mfa(find_pickle(NEW_DIR, material))
+    for comparison_name, (prefix, material) in COMPARISONS.items():
+        build_quantities = QUANTITY_BUILDERS[material]
+        old_mfa = load_future_mfa(find_pickle(OLD_DIR, prefix, material))
+        new_mfa = load_future_mfa(find_pickle(NEW_DIR, prefix, material))
 
         old_quantities = build_quantities(old_mfa)
         new_quantities = build_quantities(new_mfa)
@@ -91,8 +101,8 @@ def main():
             stacked = fd.flodym_array_stack(
                 [old_quantities[name], new_quantities[name]], dimension=RUN_DIM
             )
-            make_figure(stacked, material, name, regional=False, out_dir=OUT_DIR)
-            make_figure(stacked, material, name, regional=True, out_dir=OUT_DIR)
+            make_figure(stacked, comparison_name, name, regional=False, out_dir=OUT_DIR)
+            make_figure(stacked, comparison_name, name, regional=True, out_dir=OUT_DIR)
 
 
 if __name__ == "__main__":
