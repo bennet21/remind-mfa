@@ -321,7 +321,7 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
 
 
 plot_global("fig1_demand_by_structure_global")
-plot_regional("fig1_demand_by_structure_h1", regions, REGION_DISPLAY_NAMES, ncols=4)
+plot_regional("fig1_demand_by_structure_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
 plot_regional("fig1_demand_by_structure_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
 
 print("END")

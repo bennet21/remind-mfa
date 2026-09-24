@@ -29,6 +29,8 @@ from constants import (
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
+    AGG_REGIONS,
+    AGG_REGION_ORDER,
     STOCK_TYPE_BASE_COLORS,
 )
 from helpers import load_mfas
@@ -118,14 +120,36 @@ def global_pop(key) -> float:
     return POP[{"t": H}].sum_over("r").values.item()
 
 
-COLUMNS = [
-    {"col": 1, "keys": regions, "labels": x_labels, "stock": regional_stock, "pop": regional_pop},
-    {"col": 2, "keys": [WORLD_LABEL], "labels": [WORLD_LABEL], "stock": global_stock, "pop": global_pop},
-]
+def aggregate_stock(estimate: str, key, stocktype: str) -> float:
+    values = by_stocktype(STOCK[estimate], stocktype)
+    members = [source_region for source_region, aggregate_region in AGG_REGIONS.items()
+               if aggregate_region == key]
+    return sum(values[{"r": member}].values.item() for member in members)
+
+
+def aggregate_pop(key) -> float:
+    members = [source_region for source_region, aggregate_region in AGG_REGIONS.items()
+               if aggregate_region == key]
+    return sum(POP[{"t": H, "r": member}].values.item() for member in members)
+
+
+def make_columns(region_keys, labels, stock_accessor, pop_accessor):
+    return [
+        {"col": 1, "keys": region_keys, "labels": labels, "stock": stock_accessor, "pop": pop_accessor},
+        {"col": 2, "keys": [WORLD_LABEL], "labels": [WORLD_LABEL], "stock": global_stock, "pop": global_pop},
+    ]
+
+
+H12_COLUMNS = make_columns(
+    regions, x_labels, regional_stock, regional_pop
+)
+AGG_COLUMNS = make_columns(
+    AGG_REGION_ORDER, AGG_REGION_ORDER, aggregate_stock, aggregate_pop
+)
 
 
 def divisor(colspec: dict, row: str, key, relative: bool) -> float:
-    """Normalization: bottom-up total of the group (relative) or population (absolute)."""
+    """Normalize by population or the bottom-up stock for the selected region."""
     if not relative:
         return colspec["pop"](key)
     if row == "combined":
@@ -141,14 +165,13 @@ def bar_marker(stocktype: str, estimate: str) -> dict:
     }
 
 
-def add_data_traces(fig, relative: bool):
-    """Add the grouped (and, for the combined row, stacked) bars, per column and per row."""
-    for colspec in COLUMNS:
+def add_data_traces(fig, relative: bool, columns):
+    """Add the grouped (and, for the combined row, stacked) bars per column and row."""
+    for colspec in columns:
         col = colspec["col"]
         for row_idx, row in enumerate(ROWS, start=1):
             for estimate in ESTIMATES:
                 offsetgroup = f"c{col}_{row}_{estimate}"
-                # combined stacks Res (added first -> bottom) then Com (top)
                 parts = ["Res", "Com"] if row == "combined" else [row]
                 for stocktype in parts:
                     ys = []
@@ -170,12 +193,15 @@ def add_data_traces(fig, relative: bool):
                     )
 
 
-def add_legend_proxies(fig):
-    """Two legend blocks via invisible (y=None) proxy bars: stock type (color) + estimate (pattern)."""
+COLUMNS = H12_COLUMNS
+
+
+def add_legend_proxies(fig, label):
+    """Two legend blocks via invisible proxy bars: stock type (color) + estimate (pattern)."""
     for stocktype, name in STOCK_TYPE_NAMES.items():
         fig.add_trace(
             go.Bar(
-                x=[x_labels[0]],
+                x=[label],
                 y=[None],
                 name=name,
                 marker={"color": STOCK_TYPE_BASE_COLORS[stocktype]},
@@ -191,7 +217,7 @@ def add_legend_proxies(fig):
     for estimate in ESTIMATES:
         fig.add_trace(
             go.Bar(
-                x=[x_labels[0]],
+                x=[label],
                 y=[None],
                 name=ESTIMATE_NAMES[estimate],
                 marker={
@@ -216,12 +242,12 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot(relative: bool, output_name: str):
+def plot(relative: bool, output_name: str, columns):
     fig = make_subplots(
         rows=len(ROWS),
         cols=2,
-        shared_xaxes=True,   # share x down each column (region labels only on bottom row)
-        shared_yaxes=True,   # share y across each row (global comparable to regional)
+        shared_xaxes=True,
+        shared_yaxes=True,
         column_widths=[0.86, 0.14],
         horizontal_spacing=0.03,
         vertical_spacing=0.055,
@@ -231,12 +257,12 @@ def plot(relative: bool, output_name: str):
             ROW_TITLES["combined"], "",
         ],
     )
-    add_data_traces(fig, relative)
-    add_legend_proxies(fig)
+    add_data_traces(fig, relative, columns)
+    add_legend_proxies(fig, columns[0]["labels"][0])
 
     ylabel = "Cement stock (bottom-up = 100%)" if relative else "Cement stock (t/capita)"
 
-    for annotation in fig.layout.annotations:  # subplot (row/column) titles
+    for annotation in fig.layout.annotations:
         annotation.font = {"size": 14}
 
     fig.update_layout(
@@ -279,7 +305,6 @@ def plot(relative: bool, output_name: str):
                     col=col_idx,
                 )
 
-    # single shared y-axis label centered on the left
     fig.add_annotation(
         text=ylabel,
         x=-0.07,
@@ -296,7 +321,9 @@ def plot(relative: bool, output_name: str):
     save(fig, output_name, width=1650, height=950)
 
 
-plot(relative=False, output_name="fig4_reconciliation_stock_absolute")
-plot(relative=True, output_name="fig4_reconciliation_stock_relative")
+plot(relative=False, output_name="fig4_reconciliation_stock_h12_absolute", columns=H12_COLUMNS)
+plot(relative=True, output_name="fig4_reconciliation_stock_h12_relative", columns=H12_COLUMNS)
+plot(relative=False, output_name="fig4_reconciliation_stock_agg_absolute", columns=AGG_COLUMNS)
+plot(relative=True, output_name="fig4_reconciliation_stock_agg_relative", columns=AGG_COLUMNS)
 
 print("END")

@@ -403,7 +403,7 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
 
 
 plot_global("fig2_demand_by_function_global")
-plot_regional("fig2_demand_by_function_h1", regions, REGION_DISPLAY_NAMES, ncols=4)
+plot_regional("fig2_demand_by_function_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
 plot_regional("fig2_demand_by_function_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
 
 print("END")
