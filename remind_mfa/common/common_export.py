@@ -86,10 +86,8 @@ class CommonDataExporter(RemindMFABaseModel):
     def export_common(self):
         mfa = self._model.future_mfa
         if self.cfg.pickle.do_export:
-            self._clear_recomputable_caches(model)
-            fde.export_mfa_to_pickle(mfa=mfa, export_path=self.export_path("pickle", "mfa.pickle"))
-            self.export_model_to_pickle(model=model)
-            pickle.dump(model, open(self.export_path("pickle", "model.pickle"), "wb"))
+            self._clear_recomputable_caches()
+            pickle.dump(self._model, open(self.export_path("pickle", "model.pickle"), "wb"))
         if self.cfg.csv.do_export:
             dir_out = self.export_path("csv", "flows")
             fde.export_mfa_flows_to_csv(mfa=mfa, export_directory=dir_out)
@@ -112,29 +110,20 @@ class CommonDataExporter(RemindMFABaseModel):
     def export_custom(self):
         pass
 
-    def _clear_recomputable_caches(self, model: "CommonModel"):
-        """Drop lifetime-model sf/pdf caches from the historic and future MFA stocks before pickling.
+    def _clear_recomputable_caches(self):
+        """Drop lifetime-model sf/pdf caches from the historic and future MFA stocks before pickling
+        to save memory.
 
         These arrays (shape ``(n_t, n_t, ...)``) are read only through the ``sf``/``pdf``
         properties, which lazily recompute when the backing attribute is ``None`` -- so clearing
         them here is transparent: the next access (including any later ``stock.compute()``)
         rebuilds them from the stored lifetime parameters.
         """
-        for mfa in (model.historic_mfa, model.future_mfa):
+        for mfa in (self._model.historic_mfa, self._model.future_mfa):
             for stock in mfa.stocks.values():
-                lifetime_model = getattr(stock, "lifetime_model", None)
+                lifetime_model: fd.LifetimeModel | None = getattr(stock, "lifetime_model", None)
                 if lifetime_model is not None:
                     lifetime_model.reset_cached_arrays()
-
-    def export_model_to_pickle(self, model: "CommonModel"):
-        material = model.cfg.model.value
-        scenario = model.cfg.model_switches.scenario
-        region_mapping = model.cfg.input.region_mapping
-        datetime_str = datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
-        filename = f"model_{material}_{scenario}_{region_mapping}_{datetime_str}.pickle"
-        export_path = self.export_path("pickle", filename)
-        with open(export_path, "wb") as f:
-            pickle.dump(model, f)
 
     @property
     def model_name(self) -> str:

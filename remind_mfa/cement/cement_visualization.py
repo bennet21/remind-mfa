@@ -14,16 +14,18 @@ if TYPE_CHECKING:
 class CementVisualizer(CommonVisualizer):
     cfg: CementVisualizationCfg
 
-    def _good_letter(self, mfa: fd.MFASystem) -> str:
-        """The good-like letter the MFA's flows carry: g in top-down runs,
+    _model: Optional["CementModel"] = PrivateAttr(default=None)
+
+    def _end_use_letter(self, mfa: fd.MFASystem) -> str:
+        """The end-use-like letter the MFA's flows carry: u in top-down runs,
         e in combined/reconciled runs."""
-        return "e" if "e" in mfa.flows["prod_product => use"].dims.letters else "g"
+        return "e" if "e" in mfa.flows["prod_product => use"].dims.letters else "u"
 
-    def _good_dim_name(self, mfa: fd.MFASystem) -> str:
-        return mfa.dims[self._good_letter(mfa)].name
+    def _end_use_dim_name(self, mfa: fd.MFASystem) -> str:
+        return mfa.dims[self._end_use_letter(mfa)].name
 
-    def visualize_custom(self, model: "CementModel"):
-        mfa: StockDrivenCementMFASystem = model.future_mfa
+    def visualize_custom(self):
+        mfa: StockDrivenCementMFASystem = self._model.future_mfa
         if self.cfg.prod_clinker.do_visualize:
             self.visualize_prod_clinker(mfa=mfa)
         if self.cfg.prod_cement.do_visualize:
@@ -52,7 +54,7 @@ class CementVisualizer(CommonVisualizer):
         self.visualize_fdarr(mfa=mfa, flow=production, name="Cement production", regional=regional)
 
     def visualize_prod_product(self, mfa: fd.MFASystem, regional: bool = False):
-        production = mfa.flows["prod_product => use"].sum_over(self._good_letter(mfa))
+        production = mfa.flows["prod_product => use"].sum_over(self._end_use_letter(mfa))
         self.visualize_fdarr(mfa=mfa, flow=production, name="Product production", regional=regional)
 
     def visualize_consumption(self, mfa: fd.MFASystem):
@@ -61,7 +63,7 @@ class CementVisualizer(CommonVisualizer):
             mfa=mfa,
             flow=consumption,
             name="Cement consumption",
-            linecolor_dim=self._good_dim_name(mfa),
+            linecolor_dim=self._end_use_dim_name(mfa),
             regional=True,
         )
 
@@ -69,7 +71,7 @@ class CementVisualizer(CommonVisualizer):
         pass
 
     def visualize_use_stock(self, mfa: fd.MFASystem, subplots_by_good=False):
-        subplot_dim = self._good_dim_name(mfa) if subplots_by_good else None
+        subplot_dim = self._end_use_dim_name(mfa) if subplots_by_good else None
         stock = mfa.stocks["in_use"].stock[{"k": "cement"}]
         super().visualize_use_stock(mfa, stock=stock, subplot_dim=subplot_dim)
 
