@@ -1,0 +1,75 @@
+[base]
+    [base.input]
+        force_extract_tgz = false
+        input_data_path = "data_in"
+        input_data_revision = "2.2.2"
+        region_mapping = "h12"
+        scenarios_path = "./scenarios"
+
+    [base.model_switches]
+        scenario = "SSP2"
+        stock_extrapolation_class_name = "LogisticExtrapolation"
+        lifetime_model_name = "LogNormalLifetime"
+
+    [base.visualization]
+        do_visualize = true
+        do_show_figs = true
+        do_save_figs = false
+        plotting_engine = "plotly"
+        use_stock.do_visualize = true
+        use_stock.over_gdp = true
+        use_stock.per_capita = true
+        use_stock.accumulate_gdp = false
+        gdp.do_visualize = false
+        gdp.per_capita = false
+        production.do_visualize = true
+        trade.do_visualize = false
+        consumption.do_visualize = true
+        consumption.per_capita = true
+        sankey.do_visualize = false
+        sankey.plotter_args.slice_dict = { "t" = 2050 }
+        sankey.plotter_args.exclude_processes = ["sysenv"]
+        sankey.plotter_args.exclude_flows = []
+        extrapolation.do_visualize = true
+        sector_splits.do_visualize = false
+
+    [base.export]
+        do_export = true
+        path = "data_out"
+        bundle_export = false
+        # prefix = "test"
+        pickle.do_export = true
+        csv.do_export = false
+        iamc.do_export = false
+        mrindustry.do_export = false
+        assumptions.do_export = false
+        docs.do_export = false
+
+[plastics]
+    [plastics.visualization]
+        sankey.plotter_args.slice_dict = { "t" = 2050, "e" = "C" }
+        material_splits.do_visualize = false
+        flows.do_visualize = false
+        scenario_params.do_visualize = false
+
+[steel]
+    [steel.visualization]
+        scrap_demand_supply.do_visualize = false
+
+[cement]
+    [cement.model_switches]
+        carbonation = false
+        parameter_reconciliation.do_reconcile = false
+        parameter_reconciliation.do_combine_mfas = true
+
+    [cement.visualization]
+        eol_stock.do_visualize = false
+        eol_stock.over_gdp = false
+        eol_stock.per_capita = false
+        prod_clinker.do_visualize = false
+        prod_cement.do_visualize = true
+        prod_product.do_visualize = false
+        sankey.plotter_args.split_flows_by = "End Use"
+        sankey.plotter_args.color_scheme = "blueish"
+        sankey.plotter_args.flow_color = "hsl(230,20,70)"
+        carbonation.do_visualize = false

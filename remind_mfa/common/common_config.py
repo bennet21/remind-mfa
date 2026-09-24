@@ -1,4 +1,5 @@
-from typing import Optional
+import os
+from functools import cached_property
 
 import flodym as fd
 import pandas as pd
@@ -32,12 +33,6 @@ class ModelSwitches(RemindMFABaseModel):
     """Class name of the extrapolation subclass to use for stock extrapolation."""
     lifetime_model_name: str
     """Class name of the lifetime model subclass to use for the in-use stock."""
-    do_stock_extrapolation_by_category: bool = False
-    """Whether to perform stock extrapolation by good category."""
-    regress_over: RegressOverModes
-    """Variable to use as a predictor for stock extrapolation."""
-    do_stock_extrapolation_with_time_factor: bool = False
-    """Whether to include a time factor in stock extrapolation to account for innovation and associated changes in material applications over time."""
 
     @property
     def lifetime_model(self) -> type[fd.LifetimeModel]:
@@ -52,8 +47,6 @@ class ModelSwitches(RemindMFABaseModel):
 class BaseExportCfg(RemindMFABaseModel):
     do_export: bool = True
     """Whether to export this entity"""
-    path: str = None
-    """Path to export folder for this entity"""
 
 
 class IamcExportCfg(BaseExportCfg):
@@ -84,8 +77,16 @@ class IamcExportCfg(BaseExportCfg):
 
 
 class ExportCfg(BaseExportCfg):
+    path: str = None
+    """Path to export base folder where a subdirectory is created for each run"""
+    bundle_export: bool = False
+    """Whether to group all model outputs from one run into a shared <prefix>_series folder."""
+    prefix: str | None = None
+    """Optional fixed prefix for export file and folder names. Defaults to a timestamp."""
     csv: BaseExportCfg
     """Configuration of export to CSV files"""
+    mrindustry: BaseExportCfg
+    """Configuration of export of material flows for use as REMIND inputs."""
     pickle: BaseExportCfg
     """Configuration of export to pickle files."""
     assumptions: BaseExportCfg
@@ -126,12 +127,12 @@ class GDPVisualizationCfg(BaseVisualizationCfg):
 
 
 class VisualizationCfg(BaseVisualizationCfg):
-    figures_path: str
-    """Path to the figures directory."""
     do_show_figs: bool = True
     """Whether to show figures."""
     do_save_figs: bool = False
-    """Whether to save figures."""
+    """Whether to save figures as static png files."""
+    do_save_figs_html: bool = False
+    """Whether to save figures as standalone HTML files."""
     plotting_engine: str = "plotly"
     """Plotting engine to use for visualizations."""
     plotly_renderer: str = "browser"
@@ -154,9 +155,15 @@ class VisualizationCfg(BaseVisualizationCfg):
     sector_splits: BaseVisualizationCfg
     """Visualization configuration for sector splits."""
 
+    @model_validator(mode="after")
+    def validate(self):
+        if self.do_save_figs_html and self.plotting_engine != "plotly":
+            raise ValueError("do_save_figs_html requires plotting_engine = 'plotly'.")
+        return self
+
 
 class InputCfg(RemindMFABaseModel):
-    madrat_output_path: Optional[str] = None
+    madrat_output_path: str | None = None
     """Where to find the madrat output archives to extract input data from. If None, MADRAT_OUTPUT_FOLDER is used."""
     force_extract_tgz: bool
     """Whether to force re-extraction of input data from tgz files. If False, extraction is only performed if pre-extracted data is not up-to date."""
@@ -168,6 +175,16 @@ class InputCfg(RemindMFABaseModel):
     """Target input-data revision, corresponding to rev<revision> in tgz names."""
     region_mapping: str
     """Target region mapping, corresponding to <region> in tgz names."""
+
+    @cached_property
+    def resolved_madrat_output_path(self) -> str:
+        path = self.madrat_output_path or os.environ.get("MADRAT_OUTPUTFOLDER")
+        if not path:
+            raise ValueError(
+                "No madrat output path configured. Set input.madrat_output_path or "
+                "environment variable MADRAT_OUTPUTFOLDER."
+            )
+        return path
 
     @staticmethod
     def _normalize_revision(revision: str) -> str:

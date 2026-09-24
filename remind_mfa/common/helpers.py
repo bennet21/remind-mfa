@@ -1,11 +1,65 @@
+from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
+from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from remind_mfa.common.common_model import CommonModel
+
+_SERIES_EXPORT_PATH = None
+
+DOCS_PATH = Path(__file__).parents[2] / "docs"
+
+
+def _timestamp_prefix() -> str:
+    return datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
+
+
+def export_dir_prefix(prescribed_prefix: str | None = None) -> str:
+    """Return the export prefix, creating it once and reusing it across model runs."""
+    return prescribed_prefix if prescribed_prefix is not None else _timestamp_prefix()
+
+
+def series_export_path(base_path: str, prefix: str | None = None) -> str:
+    """Return the series prefix, creating it once and reusing it across model runs."""
+    global _SERIES_EXPORT_PATH
+    if _SERIES_EXPORT_PATH is None:
+        _SERIES_EXPORT_PATH = Path(base_path) / (export_dir_prefix(prefix) + "_series")
+    return _SERIES_EXPORT_PATH
 
 
 class ModelNames(str, Enum):
     PLASTICS = "plastics"
     STEEL = "steel"
     CEMENT = "cement"
+
+
+def get_model_class(name: ModelNames) -> type["CommonModel"]:
+
+    match name:
+        case ModelNames.PLASTICS:
+            from remind_mfa.plastics.plastics_model import PlasticsModel
+
+            return PlasticsModel
+        case ModelNames.STEEL:
+            from remind_mfa.steel.steel_model import SteelModel
+
+            return SteelModel
+        case ModelNames.CEMENT:
+            from remind_mfa.cement.cement_model import CementModel
+
+            return CementModel
+
+
+def init_model(cfg: dict) -> "CommonModel":
+    """Choose an MFA subclass and return an initialized instance."""
+
+    if "model" not in cfg:
+        raise ValueError("'model' must be given.")
+    model = ModelNames(cfg["model"])
+    return get_model_class(model)(cfg=cfg)
 
 
 def prefix_from_module(module: str) -> str:
@@ -29,8 +83,3 @@ class RemindMFABaseModel(BaseModel):
         arbitrary_types_allowed=True,
         use_attribute_docstrings=True,
     )
-
-
-class RegressOverModes(str, Enum):
-    LOGGDPPC = "loggdppc"
-    LOGGDPPC_TIME = "loggdppc_time"

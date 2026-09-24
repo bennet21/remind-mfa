@@ -19,6 +19,7 @@ def get_cement_definition(
         )
     
 
+
     # 1) Dimensions
     dimensions = [
         fd.DimensionDefinition(name="Time", dim_letter="t", dtype=int),
@@ -32,7 +33,7 @@ def get_cement_definition(
         fd.DimensionDefinition(name="Product Application", dim_letter="a", dtype=str),
         fd.DimensionDefinition(name="Waste Type", dim_letter="w", dtype=str),
         fd.DimensionDefinition(name="Waste Size", dim_letter="p", dtype=str),
-        fd.DimensionDefinition(name="Carbonation Location", dim_letter="c", dtype=str),
+        fd.DimensionDefinition(name="Carbonation Location", dim_letter="l", dtype=str),
         # service demand
         fd.DimensionDefinition(name="Structure", dim_letter="s", dtype=str),
         fd.DimensionDefinition(name="Common Good", dim_letter="u", dtype=str),  # Res/Com

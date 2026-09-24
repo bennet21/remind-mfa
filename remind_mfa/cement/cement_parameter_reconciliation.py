@@ -107,7 +107,6 @@ class CementParameterReconciliation:
 
         self.output_dims_are_independent = output_dims_are_independent
 
-        self.prepare_dims()
         self.input_prms = deepcopy(ref_mfa.parameters)
         self.prepare_prms(ref_mfa.parameters)
         self.prepare_flws()
@@ -442,7 +441,7 @@ class CementParameterReconciliation:
         """
         Iterate over all element combinations of a DimensionSet, yielding dict slicers.
 
-        Yields dicts like {'r': 'USA', 'u': 'Res'} for each element in the Cartesian product.
+        Yields dicts like {'r': 'USA', 'c': 'Res'} for each element in the Cartesian product.
         Order matches numpy flatten (C-order): last dimension varies fastest.
         """
         items_per_dim = [d.items for d in dims]

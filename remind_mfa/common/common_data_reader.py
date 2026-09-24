@@ -1,19 +1,25 @@
 import glob
 import os
 import tarfile
+import logging
+from os import PathLike
 from pathlib import Path
 
 import flodym as fd
 import pandas as pd
-from typing_extensions import TypeIs
 
 from remind_mfa.common.common_config import CommonCfg
 from remind_mfa.common.common_definition import RemindMFADefinition
 from remind_mfa.common.common_mappings import CommonDimensionFiles
-from remind_mfa.common.helpers import module_from_prefix, prefix_from_module
+from remind_mfa.common.helpers import prefix_from_module
 
 
 class CommonDataReader(fd.CompoundDataReader):
+
+    # Suffixes (before the ".tgz") distinguishing the two archive kinds produced by madrat:
+    # the main input-data archive and the (optional) validation-data archive.
+    MFA_SUFFIX = "_mfa"
+    VALIDATION_SUFFIX = "_validationmfa"
 
     def __init__(
         self,
@@ -23,12 +29,12 @@ class CommonDataReader(fd.CompoundDataReader):
         allow_missing_values: bool = False,
         allow_extra_values: bool = False,
     ):
+        self._input_cfg = cfg.input
         self.dimension_file_mapping = dimension_file_mapping
         self.model_class = cfg.model
-        self.input_data_path = cfg.input.input_data_path
+        self.input_data_path = Path(cfg.input.input_data_path)
         self.input_data_revision = cfg.input.input_data_revision
         self.region_mapping = cfg.input.region_mapping
-        self.madrat_output_path = self.resolve_madrat_output_path(cfg.input.madrat_output_path)
         self.force_extract = cfg.input.force_extract_tgz
         self.definition = definition
         self.allow_missing_values = allow_missing_values
@@ -36,8 +42,20 @@ class CommonDataReader(fd.CompoundDataReader):
         self.prepare_input_readers()
 
     @property
-    def shared_parameter_path(self) -> str:
-        return os.path.join(self.input_data_path, "input_data")
+    def parameters_path(self) -> Path:
+        return self.input_data_path / "parameters"
+
+    @property
+    def legacy_parameters_path(self) -> Path:
+        return self.input_data_path / "legacy" / "input_data"
+
+    @property
+    def validation_path(self) -> Path:
+        return self.input_data_path / "validation"
+
+    @property
+    def dimensions_path(self) -> Path:
+        return self.input_data_path / "dimensions" / self.model_class
 
     @property
     def rev_filename(self) -> str:
@@ -47,48 +65,24 @@ class CommonDataReader(fd.CompoundDataReader):
     def regions_filename(self) -> str:
         return "regions.txt"
 
-    @staticmethod
-    def resolve_madrat_output_path(configured_path: str | None) -> str:
-        def check_path(path: str | None) -> TypeIs[str]:
-            if not path:
-                return False
-            if not Path(path).exists():
-                import logging
-
-                logging.warning(
-                    f"Specified MADRAT output path '{path}' does not exist. Creating it."
-                )
-                Path(path).mkdir(parents=True, exist_ok=True)
-            return True
-
-        if check_path(configured_path):
-            return configured_path
-        env_path = os.environ.get("MADRAT_OUTPUTFOLDER")
-        if not check_path(env_path):
-            raise ValueError(
-                "No madrat output path configured. Set input.madrat_output_path or "
-                "environment variable MADRAT_OUTPUTFOLDER."
-            )
-        return env_path
-
-    def get_material_dimension_path(self, material: str) -> str:
-        return os.path.join(self.input_data_path, "dimensions", material)
-
     def prepare_input_readers(self):
         # prepare directory for extracted input data
-        os.makedirs(self.shared_parameter_path, exist_ok=True)
+        self.parameters_path.mkdir(parents=True, exist_ok=True)
 
         # extract tar file if needed
-        if self.extraction_needed(self.shared_parameter_path):
-            self.extract_tar_file(self.shared_parameter_path)
+        if self.extraction_needed(self.parameters_path):
+            self.extract_tar_file(self.parameters_path)
+
+        # extract the matching validation archive (optional; warns if not found)
+        if self.extraction_needed(self.validation_path):
+            self.extract_validation_tar_file(self.validation_path)
 
         # dimensions
-        dimension_files = self.get_dimension_dict(self.shared_parameter_path)
+        dimension_files = self.get_dimension_files()
         dimension_reader = CommonDimensionReader(dimension_files)
 
         # parameters
-        parameter_files = self.get_parameter_dict(self.shared_parameter_path)
-        self.validate_parameter_files(parameter_files)
+        parameter_files = self.get_parameter_files()
         parameter_reader = MadratParameterReader(
             parameter_files,
             allow_extra_values=self.allow_extra_values,
@@ -98,33 +92,32 @@ class CommonDataReader(fd.CompoundDataReader):
         super().__init__(dimension_reader=dimension_reader, parameter_reader=parameter_reader)
 
     @staticmethod
-    def read_text_file(path: str) -> str | None:
+    def read_text_file(path: str | os.PathLike[str]) -> str | None:
         if not os.path.exists(path):
             return None
         with open(path, "r") as f:
             return f.read().strip()
 
     @staticmethod
-    def write_text_file(path: str, value: str):
+    def write_text_file(path: str | os.PathLike[str], value: str):
         with open(path, "w") as f:
             f.write(value)
 
-    @staticmethod
-    def parse_archive_name(filename: str) -> tuple[str, str]:
+    @classmethod
+    def parse_archive_name(cls, filename: str, suffix: str = MFA_SUFFIX) -> tuple[str, str]:
         stem = os.path.basename(filename)
-        if stem.endswith(".tgz"):
-            stem = stem[: -len(".tgz")]
+        stem = stem.removesuffix(".tgz")
 
-        if not stem.startswith("rev") or not stem.endswith("_mfa"):
+        if not stem.startswith("rev") or not stem.endswith(suffix):
             raise ValueError(
-                f"Invalid archive name '{filename}'. Expected format rev<rev>_<regions>_<hash>_mfa.tgz"
+                f"Invalid archive name '{filename}'. Expected format rev<rev>_<regions>_<hash>{suffix}.tgz"
             )
 
-        payload = stem[len("rev") : -len("_mfa")]
+        payload = stem[len("rev") : -len(suffix)]
         parts = payload.split("_")
         if len(parts) < 3:
             raise ValueError(
-                f"Invalid archive name '{filename}'. Expected format rev<rev>_<regions>_<hash>_mfa.tgz"
+                f"Invalid archive name '{filename}'. Expected format rev<rev>_<regions>_<hash>{suffix}.tgz"
             )
 
         rev = "_".join(parts[:-2]).strip()
@@ -136,29 +129,39 @@ class CommonDataReader(fd.CompoundDataReader):
 
         return rev, regions
 
-    def extraction_needed(self, material_parameter_path: str) -> bool:
+    def extraction_needed(self, parameters_path: Path) -> bool:
         if self.force_extract:
             return True
-        rev_path = os.path.join(material_parameter_path, self.rev_filename)
-        regions_path = os.path.join(material_parameter_path, self.regions_filename)
+        rev_path = parameters_path / self.rev_filename
+        regions_path = parameters_path / self.regions_filename
         current_rev = self.read_text_file(rev_path)
         current_regions = self.read_text_file(regions_path)
         return current_rev != self.input_data_revision or current_regions != self.region_mapping
 
     @staticmethod
-    def build_target_tgz_pattern(input_data_revision: str, region_mapping: str) -> str:
-        return f"rev{glob.escape(input_data_revision)}_" f"{glob.escape(region_mapping)}_*_mfa.tgz"
-
-    def get_target_tgz_path(self) -> str:
-        search_pattern = self.build_target_tgz_pattern(
-            self.input_data_revision, self.region_mapping
+    def build_target_tgz_pattern(
+        input_data_revision: str, region_mapping: str, suffix: str = MFA_SUFFIX
+    ) -> str:
+        return (
+            f"rev{glob.escape(input_data_revision)}_" f"{glob.escape(region_mapping)}_*{suffix}.tgz"
         )
-        matches = sorted(glob.glob(os.path.join(self.madrat_output_path, search_pattern)))
+
+    def find_target_tgz_paths(self, suffix: str = MFA_SUFFIX) -> list[str]:
+        """Return all madrat archives matching the configured revision/region and given suffix."""
+        search_pattern = self.build_target_tgz_pattern(
+            self.input_data_revision, self.region_mapping, suffix
+        )
+        return sorted(
+            glob.glob(os.path.join(self._input_cfg.resolved_madrat_output_path, search_pattern))
+        )
+
+    def get_target_tgz_path(self, suffix: str = MFA_SUFFIX) -> str:
+        matches = self.find_target_tgz_paths(suffix)
         if not matches:
             raise FileNotFoundError(
                 "No matching tgz archive found in "
-                f"{self.madrat_output_path} for revision={self.input_data_revision}, "
-                f"region_mapping={self.region_mapping}."
+                f"{self._input_cfg.resolved_madrat_output_path} for revision={self.input_data_revision}, "
+                f"region_mapping={self.region_mapping}, suffix={suffix}."
             )
         if len(matches) > 1:
             raise ValueError(
@@ -168,74 +171,119 @@ class CommonDataReader(fd.CompoundDataReader):
             )
         return matches[0]
 
-    def extract_tar_file(self, material_parameter_path: str):
+    def extract_tar_file(self, parameters_path: Path):
         """Extracts the matching tgz into the shared input_data folder and stores rev/regions metadata."""
-        tgz_path = self.get_target_tgz_path()
+        if not os.path.isdir(self._input_cfg.resolved_madrat_output_path):
+            raise FileNotFoundError(
+                f"MADRAT output path '{self._input_cfg.resolved_madrat_output_path}' does not exist. It is required to extract the "
+                "input-data archive for the configured revision/region mapping. Set "
+                "input.madrat_output_path or the MADRAT_OUTPUTFOLDER environment variable to an "
+                "existing directory containing the rev*_mfa.tgz archive."
+            )
+
+        tgz_path = self.get_target_tgz_path(self.MFA_SUFFIX)
+        self._extract_and_record(tgz_path, parameters_path)
+
+    def extract_validation_tar_file(self, validation_path: Path):
+        """Extracts the validation tgz matching the configured revision/region into ``validation_path``.
+
+        The validation archive is optional: if no archive matching the current input-data
+        revision and region mapping is found, a warning is issued and extraction is skipped
+        (rather than raising, as the main input-data archive does).
+        """
+        try:
+            madrat_output_path = self._input_cfg.resolved_madrat_output_path
+        except ValueError:
+            madrat_output_path = None
+        if not madrat_output_path or not os.path.isdir(madrat_output_path):
+            logging.warning(
+                "No MADRAT output path available to extract the validation archive "
+                f"(revision={self.input_data_revision}, region_mapping={self.region_mapping}). "
+                "Validation data will not be available.",
+                stacklevel=2,
+            )
+            return
+
+        matches = self.find_target_tgz_paths(self.VALIDATION_SUFFIX)
+        if not matches:
+            logging.warning(
+                "No validation tgz archive found in "
+                f"'{self._input_cfg.resolved_madrat_output_path}' for revision="
+                f"{self.input_data_revision}, region_mapping={self.region_mapping} "
+                f"(expected a rev*{self.VALIDATION_SUFFIX}.tgz archive). "
+                "Validation data will not be available.",
+                stacklevel=2,
+            )
+            return
+        if len(matches) > 1:
+            raise ValueError(
+                "Multiple matching validation tgz archives found for the selected revision/region "
+                "mapping. Make the selector more specific or remove duplicate archives. Matches: "
+                f"{[os.path.basename(match) for match in matches]}"
+            )
+
+        self._extract_and_record(matches[0], validation_path, suffix=self.VALIDATION_SUFFIX)
+
+    def _extract_and_record(
+        self,
+        tgz_path: str,
+        target_path: Path,
+        suffix: str = MFA_SUFFIX,
+    ):
+        """Extract ``tgz_path`` into ``target_path`` and record its rev/regions metadata there."""
+        logging.info(f"Extracting new input data from {tgz_path} into {target_path}...")
+        target_path.mkdir(parents=True, exist_ok=True)
 
         with tarfile.open(tgz_path, "r:gz") as tar:
-            tar.extractall(path=material_parameter_path)
+            tar.extractall(target_path)
 
-        rev, regions = self.parse_archive_name(os.path.basename(tgz_path))
-        self.write_text_file(os.path.join(material_parameter_path, self.rev_filename), rev)
-        self.write_text_file(os.path.join(material_parameter_path, self.regions_filename), regions)
+        rev, regions = self.parse_archive_name(os.path.basename(tgz_path), suffix)
+        self.write_text_file(os.path.join(target_path, self.rev_filename), rev)
+        self.write_text_file(os.path.join(target_path, self.regions_filename), regions)
 
-    def validate_parameter_files(self, parameter_files: dict[str, str]):
-        """Validate that all expected parameter files for the selected model exist."""
-        missing = [
-            (name, path) for name, path in parameter_files.items() if not os.path.exists(path)
-        ]
+    def _validate_files(self, kind: str, files: dict[str, str | os.PathLike[str]]):
+        missing = {name: path for name, path in files.items() if not Path(path).exists()}
         if missing:
             raise FileNotFoundError(
-                f"Missing parameter files in shared input_data folder '{self.shared_parameter_path}' for model "
-                f"'{self.model_class}': { [f'{name} -> {os.path.basename(path)}' for name, path in missing]}"
+                f"Missing {kind} files for model "
+                f"'{self.model_class}': { [f'{name} -> {path!r}' for name, path in missing.items()]}"
             )
 
-        for filepath in parameter_files.values():
-            filename = os.path.basename(filepath)
-            if "_" not in filename:
-                raise ValueError(
-                    f"Unexpected filename format: {filename}. "
-                    "Must have form of 'prefix_parametername.cs4r'"
-                )
-            prefix = filename.split("_")[0]
-            try:
-                material = module_from_prefix(prefix)
-            except ValueError as e:
-                raise ValueError(f"Unexpected prefix '{prefix}' in filename '{filename}'.") from e
-            if material != self.model_class:
-                raise ValueError(
-                    f"Parameter file '{filename}' does not belong to selected model '{self.model_class}'."
-                )
-
-    def get_dimension_dict(self, material_parameter_path: str) -> dict[str, str]:
-        material_dimension_path = self.get_material_dimension_path(self.model_class)
-
-        dimension_files: dict[str, str] = {}
+    def get_dimension_files(self) -> dict[str, str | os.PathLike[str]]:
+        dimension_files: dict[str, str | os.PathLike[str]] = {}
         for dimension in self.definition.dimensions:
-            dimension_filename = self.dimension_file_mapping[dimension.name]
-            dimension_files[dimension.name] = os.path.join(
-                material_dimension_path, f"{dimension_filename}.csv"
-            )
-        # Special case for Region dimensions
-        if "Region" in dimension_files:
-            regionmapping_path = os.path.join(material_parameter_path, "regionmapping.csv")
-            if not os.path.exists(regionmapping_path):
-                raise FileNotFoundError(
-                    f"No regionmapping.csv found in shared input_data folder {material_parameter_path}"
-                )
-            dimension_files["Region"] = regionmapping_path
+            if dimension.name == "Region":
+                # Special case for Region: it is read from the parameters folder, not the dimensions folder
+                dimension_path = self.parameters_path / "regionmapping.csv"
+            else:
+                dimension_filename = self.dimension_file_mapping[dimension.name]
+                dimension_path = self.dimensions_path / f"{dimension_filename}.csv"
 
+            dimension_files[dimension.name] = dimension_path
+
+        self._validate_files("dimension", dimension_files)
         return dimension_files
 
-    def get_parameter_dict(self, material_parameter_path: str) -> dict[str, str]:
-        material_prefix = prefix_from_module(self.model_class)
-        parameter_files: dict[str, str] = {}
+    def get_parameter_files(self) -> dict[str, str | os.PathLike[str]]:
+        model_prefix = prefix_from_module(self.model_class)
+        parameter_files: dict[str, str | os.PathLike[str]] = {}
+        legacy_files = ()
         for parameter in self.definition.parameters:
-            material_specific_file = os.path.join(
-                material_parameter_path, f"{material_prefix}_{parameter.name}.cs4r"
-            )
-            parameter_files[parameter.name] = material_specific_file
+            model_specific_file = self.parameters_path / f"{model_prefix}_{parameter.name}.cs4r"
+            legacy_file = self.legacy_parameters_path / f"{model_prefix}_{parameter.name}.cs4r"
 
+            if not model_specific_file.exists() and legacy_file.exists():
+                legacy_files += (parameter.name,)
+                parameter_files[parameter.name] = legacy_file
+            else:
+                parameter_files[parameter.name] = model_specific_file
+        if legacy_files:
+            logging.warning(
+                f"Parameter files for parameters {legacy_files} not found. Using legacy files instead.",
+                stacklevel=2,
+            )
+
+        self._validate_files("parameter", parameter_files)
         return parameter_files
 
 
@@ -274,7 +322,7 @@ class MadratParameterReader(fd.CSVParameterReader):
         self.read_csv_kwargs = {"names": header, "skiprows": skiprows}
 
     @staticmethod
-    def extract_cs4r_info(filepath: str):
+    def extract_cs4r_info(filepath: str | PathLike[str]) -> tuple[list[str], int]:
         """Extract header and skiprows from .cs4r file."""
         pre_str = "dimensions: ("
         post_str = ")"

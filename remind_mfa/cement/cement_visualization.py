@@ -1,6 +1,6 @@
+from pydantic import PrivateAttr
 import flodym as fd
-from typing import TYPE_CHECKING
-import numpy as np
+from typing import TYPE_CHECKING, Optional
 import logging
 
 from remind_mfa.common.common_visualization import CommonVisualizer
@@ -34,7 +34,7 @@ class CementVisualizer(CommonVisualizer):
         if self.cfg.eol_stock.do_visualize:
             self.visualize_eol_stock(mfa=mfa)
         if self.cfg.carbonation.do_visualize:
-            if not model.cfg.model_switches.carbonation:
+            if not self._model.cfg.model_switches.carbonation:
                 logging.warning(
                     "Carbonation visualization requested, but carbonation module not activated."
                 )

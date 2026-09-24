@@ -18,6 +18,25 @@ def _sum_to_good_split(arr: fd.FlodymArray) -> fd.FlodymArray:
 
 
 class CementDataExporter(CommonDataExporter):
+    _model: Optional["CementModel"] = PrivateAttr(default=None)
+
+    @staticmethod
+    def _cement_production(mfa: fd.MFASystem) -> fd.FlodymArray:
+        """Cement output before trade and construction losses"""
+        return mfa.flows["prod_cement => market_cement"].sum_to(("t", "r"))
+
+    def get_mrindustry_variables(self) -> list[RemindInputVariable]:
+        return [
+            RemindInputVariable(
+                name="cement_production",
+                calculation_function=CementDataExporter._cement_production,
+                unit="t/yr",
+            ),
+            RemindInputVariable(
+                name="cement_clinker_ratio",
+                calculation_function=lambda mfa: (mfa.parameters["clinker_ratio"]),
+            ),
+        ]
 
     def iamc_variables(self) -> list[IamcVariable]:
         return [

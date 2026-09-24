@@ -187,7 +187,7 @@ class CementModel(CommonModel):
 
     def reconcile_parameters(
         self,
-        max_iter: int = 10,
+        max_iter: int = 5,
         tol: Optional[float] = 1e-3,
     ):
         """Reconcile parameters between top-down and bottom-up stocks.
