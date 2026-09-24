@@ -45,7 +45,7 @@ from helpers import aggregate_by_region, cement_demand, load_mfas, process_emiss
 
 GT_PER_T = 1e-9
 FIRST_FUTURE_YEAR = LAST_HISTORICAL_YEAR + 1
-CE_Y_OFFSET = 0.42
+CE_Y_OFFSET = -0.42
 CE_BOX_WIDTH = 0.16
 ARROW_COLOR = "#1a1a1a"
 CALLOUT_COLOR = "#555555"
@@ -286,25 +286,49 @@ def make_ce_savings_boxes(
 
 
 def make_ce_callout(
-    sorted_ssps: list[str], scenario_data: dict, key: str, xref: str, yref: str
+    sorted_ssps: list[str],
+    scenario_data: dict,
+    key: str,
+    unit: str,
+    xref: str,
+    yref: str,
+    include_explanation: bool,
 ) -> list[dict]:
-    """Inline callout on the highest CE-enabled bar explaining the CE savings box/arrow."""
+    """Savings values below each CE overlay and an explanatory CE savings callout."""
     ce_ssps = [ssp for ssp in sorted_ssps if f"{ssp}_CE" in scenario_data]
     if not ce_ssps:
         return []
+    annotations = []
+    for ssp in ce_ssps:
+        ce_ssp = f"{ssp}_CE"
+        savings_mid = (scenario_data[ce_ssp][key] + scenario_data[ssp][key]) / 2
+        savings = scenario_data[ssp][key] - scenario_data[ce_ssp][key]
+        annotations.append(
+            dict(
+                x=savings_mid,
+                y=sorted_ssps.index(ssp) + CE_Y_OFFSET,
+                xref=xref,
+                yref=yref,
+                yshift=-10,
+                text=f"{savings:.1f} {unit}",
+                showarrow=False,
+                font=dict(size=8, color=CALLOUT_COLOR),
+                align="center",
+            )
+        )
+    if not include_explanation:
+        return annotations
     ssp = ce_ssps[-1]
     ce_ssp = f"{ssp}_CE"
     savings_mid = (scenario_data[ce_ssp][key] + scenario_data[ssp][key]) / 2
-    return [
+    annotations.append(
         dict(
             x=savings_mid,
             y=sorted_ssps.index(ssp) + CE_Y_OFFSET,
             xref=xref,
             yref=yref,
             ax=savings_mid,
-            # Shorter leader than the region callouts: this bar sits mid-plot, so a long
-            # line would run into the row above.
-            ay=-24,
+            ay=-48,
             axref=xref,
             ayref="pixel",
             text="CE savings",
@@ -315,7 +339,8 @@ def make_ce_callout(
             font=dict(size=10.5, color=CALLOUT_COLOR),
             align="center",
         )
-    ]
+    )
+    return annotations
 
 
 def make_layout(
@@ -348,7 +373,7 @@ def make_layout(
             ticktext=[SSP_LABELS[ssp] for ssp in sorted_ssps],
             tickfont=dict(size=13),
             ticks="",
-            range=[-0.55, len(sorted_ssps) - 0.1],
+            range=[-0.8, len(sorted_ssps) - 0.1],
         ),
         yaxis2=dict(tickfont=dict(size=13), ticks="", showticklabels=False),
         margin=dict(l=110, r=30, t=100, b=55),
@@ -365,6 +390,8 @@ def plot_comparison(
     key: str,
     per_capita_title: str,
     absolute_title: str,
+    per_capita_unit: str,
+    absolute_unit: str,
     output_name: str,
 ):
     """Plot the world per-capita value and the region-split absolute value for one flow."""
@@ -380,9 +407,12 @@ def plot_comparison(
         fig.add_trace(trace)
     annotations = (
         make_ce_annotations(sorted_ssps, scenario_data, per_capita_key, "x", "y")
-        + make_ce_callout(sorted_ssps, scenario_data, per_capita_key, "x", "y")
+        + make_ce_callout(
+            sorted_ssps, scenario_data, per_capita_key, per_capita_unit, "x", "y", True
+        )
         + make_region_callouts(sorted_ssps, scenario_data, key, "x2", "y2")
         + make_ce_annotations(sorted_ssps, scenario_data, key, "x2", "y2")
+        + make_ce_callout(sorted_ssps, scenario_data, key, absolute_unit, "x2", "y2", False)
     )
     fig.update_layout(**make_layout(sorted_ssps, per_capita_title, absolute_title, annotations))
     save(fig, output_name, width=1000, height=430)
@@ -398,6 +428,8 @@ plot_comparison(
     "demand",
     f"World per capita {FIRST_FUTURE_YEAR}–2100 (t/cap)",
     f"Absolute {FIRST_FUTURE_YEAR}–2100 (Gt)",
+    "t/cap",
+    "Gt",
     "fig7_cumulative_demand",
 )
 plot_comparison(
@@ -406,6 +438,8 @@ plot_comparison(
     "emissions",
     f"World per capita {FIRST_FUTURE_YEAR}–2100 (t CO₂/cap)",
     f"Absolute {FIRST_FUTURE_YEAR}–2100 (Gt CO₂)",
+    "t CO₂/cap",
+    "Gt CO₂",
     "fig7_cumulative_process_emissions",
 )
 

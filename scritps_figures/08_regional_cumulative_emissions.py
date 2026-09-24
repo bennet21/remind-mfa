@@ -150,15 +150,17 @@ def make_marker_annotations(regional_data: dict, xref: str, yref: str) -> list[d
             yref=yref,
             text=str(year),
             showarrow=False,
-            yshift=13 if index % 2 == 0 else 28,
+            yshift=18,
             font=dict(size=10.5, color=MARKER_COLOR),
         )
         for index, year in enumerate(marker_years)
     ]
 
 
-def make_ce_annotations(regional_data: dict, ce_data: dict, xref: str, yref: str) -> list[dict]:
-    """Slim arrow from each region's bar end to its CE counterpart's value, below its box.
+def make_ce_annotations(
+    regional_data: dict, ce_data: dict, unit: str, xref: str, yref: str
+) -> list[dict]:
+    """Arrow and savings value from each region's bar end to its CE counterpart.
 
     Each bar end is that scenario's own hist + future, so the arrow stays correct even if the
     historical segments of the base and CE runs ever diverge.
@@ -182,6 +184,26 @@ def make_ce_annotations(regional_data: dict, ce_data: dict, xref: str, yref: str
                 arrowwidth=1.6,
                 arrowcolor=ARROW_COLOR,
                 text="",
+            )
+        )
+        annotations.append(
+            dict(
+                x=(
+                    ce_data[r]["hist"]
+                    + ce_data[r]["future"]
+                    + regional_data[r]["hist"]
+                    + regional_data[r]["future"]
+                )
+                / 2,
+                y=r,
+                xref=xref,
+                yref=yref,
+                yshift=-20,
+                text=(
+                    f"{regional_data[r]['hist'] + regional_data[r]['future'] - ce_data[r]['hist'] - ce_data[r]['future']:.1f} {unit}"
+                ),
+                showarrow=False,
+                font=dict(size=8, color=CALLOUT_COLOR),
             )
         )
     return annotations
@@ -322,12 +344,14 @@ def plot_scenario(
     annotations = make_topbar_callouts(percapita_data, ce_percapita_data, "x", "y")
     if ce_percapita_data:
         traces.append(make_ce_savings_box(percapita_data, ce_percapita_data, "x", "y"))
-        annotations += make_ce_annotations(percapita_data, ce_percapita_data, "x", "y")
+        annotations += make_ce_annotations(
+            percapita_data, ce_percapita_data, "t CO₂/cap", "x", "y"
+        )
 
     traces += make_panel_bars(regional_data, "x2", "y2")
     if ce_data:
         traces.append(make_ce_savings_box(regional_data, ce_data, "x2", "y2"))
-        annotations += make_ce_annotations(regional_data, ce_data, "x2", "y2")
+        annotations += make_ce_annotations(regional_data, ce_data, "Gt CO₂", "x2", "y2")
     traces.append(make_marker_trace(regional_data, "x2", "y2"))
     annotations += make_marker_annotations(regional_data, "x2", "y2")
 

@@ -10,7 +10,7 @@ LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
 # Cumulative-value marker years for figure 8 (absolute panel only)
-CUMULATIVE_MARKER_YEARS = [2050, 2070]
+CUMULATIVE_MARKER_YEARS = [2050,]
 CUMULATIVE_MARKER_YEAR_HISTORICAL = 1990
 
 # Lightening applied to a bar's own colour for the circular-economy savings boxes
