@@ -235,7 +235,7 @@ class CriticallyDampedBlender:
         _, a0 = self._trend_derivatives(
             self.time,
             self.historical,
-            np.minimum(2, trend_window),
+            np.maximum(2, trend_window),
             last_history_idx,
             deg=2,
         )
