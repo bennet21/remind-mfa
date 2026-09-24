@@ -8,7 +8,17 @@ and SSP2, the reduction achieved by the corresponding _CE circular-economy varia
 as a slim arrow (below its box) plus a lightly shaded box per region. The left panel carries
 inline callouts explaining historical/future/CE savings; the right panel instead marks the
 cumulative value up to CUMULATIVE_MARKER_YEAR_HISTORICAL and each of CUMULATIVE_MARKER_YEARS
-(constants.py) with star markers, to avoid repeating the same explanation twice.
+(constants.py) with vertical tick marks, to avoid repeating the same explanation twice.
+
+Emissions are the calcination CO2 of the clinker and cement kiln dust needed for the region's
+market cement demand, as defined in `helpers.cement_demand` / `helpers.process_emissions`, so
+they are attributed to the consuming region. The historical segment is the stock-driven
+reconstruction of the future MFA over the historical years, not reported cement statistics.
+
+The per-capita panel divides each aggregated region's emissions by that same region's
+population, year by year, and sums the ratio over the years of each segment. That is an
+average annual rate multiplied by the number of years, not the cumulative total divided by a
+single population figure.
 Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
@@ -22,7 +32,7 @@ from plotly.subplots import make_subplots
 from constants import (
     AGG_REGION_COLORS,
     AGG_REGION_ORDER,
-    AGG_REGIONS,
+    CE_SHADE,
     CUMULATIVE_MARKER_YEAR_HISTORICAL,
     CUMULATIVE_MARKER_YEARS,
     FIGURES_DIR,
@@ -33,7 +43,7 @@ from constants import (
     SSP_LABELS,
     SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas, shade
+from helpers import aggregate_by_region, cement_demand, load_mfas, process_emissions, shade
 
 GT_PER_T = 1e-9
 REGION_COLORS = AGG_REGION_COLORS
@@ -42,33 +52,24 @@ CALLOUT_COLOR = "#555555"
 MARKER_COLOR = "#222222"
 
 
-def aggregate_by_region(values: np.ndarray, region_items: np.ndarray) -> dict[str, np.ndarray]:
-    """Sum a (t, r) array's source regions into aggregated regions; return one time series each."""
-    result = {agg_region: None for agg_region in AGG_REGION_ORDER}
-    for source_region, agg_region in AGG_REGIONS.items():
-        mask = region_items == source_region
-        contribution = values[:, mask].sum(axis=1)
-        result[agg_region] = (
-            contribution if result[agg_region] is None else result[agg_region] + contribution
-        )
-    return result
+def load_emissions(ssp: str):
+    """Process CO2 emissions (t) and population as (t, r) arrays, plus the year axis."""
+    # All parameters come from the reconciled MFA, so that reconciled values
+    # (cement_losses in particular) are the ones used here.
+    combined = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])["combined"]
+    prm = combined.parameters
+
+    emissions_arr = process_emissions(cement_demand(combined), prm)
+    years = np.array(emissions_arr.dims["t"].items)
+    region_items = np.array(emissions_arr.dims["r"].items)
+    return emissions_arr, prm["population"], years, region_items
 
 
 def load_regional_emissions(ssp: str) -> dict[str, dict[str, float]]:
     """Cumulative process CO2 emissions (Gt) per aggregated region, split hist/future."""
-    mfas = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])
-    combined, td = mfas["combined"], mfas["td"]
-    prm = td.parameters
-
-    demand_arr = combined.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
-    emissions_arr = (
-        demand_arr * prm["clinker_ratio"] * prm["clinker_cao_ratio"] * prm["cao_emission_factor"]
-    )
-
-    years = np.array(emissions_arr.dims["t"].items)
+    emissions_arr, _, years, region_items = load_emissions(ssp)
     future = years > LAST_HISTORICAL_YEAR
     hist = ~future
-    region_items = np.array(emissions_arr.dims["r"].items)
 
     emissions_by_region = aggregate_by_region(emissions_arr.values, region_items)
 
@@ -88,23 +89,14 @@ def load_regional_emissions(ssp: str) -> dict[str, dict[str, float]]:
 def load_regional_emissions_per_capita(ssp: str) -> dict[str, dict[str, float]]:
     """Cumulative per-capita process CO2 emissions (t/cap) per aggregated region, hist/future.
 
-    Computed as the sum, over the years in each segment, of that year's regional emissions
-    divided by that year's regional population.
+    Computed as the sum, over the years in each segment, of that year's aggregated-region
+    emissions divided by that year's aggregated-region population. Emissions and population
+    are aggregated separately and divided afterwards; per-capita values of the underlying
+    model regions cannot be added.
     """
-    mfas = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])
-    combined, td = mfas["combined"], mfas["td"]
-    prm = td.parameters
-
-    demand_arr = combined.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
-    emissions_arr = (
-        demand_arr * prm["clinker_ratio"] * prm["clinker_cao_ratio"] * prm["cao_emission_factor"]
-    )
-    population_arr = prm["population"]
-
-    years = np.array(emissions_arr.dims["t"].items)
+    emissions_arr, population_arr, years, region_items = load_emissions(ssp)
     future = years > LAST_HISTORICAL_YEAR
     hist = ~future
-    region_items = np.array(emissions_arr.dims["r"].items)
 
     emissions_by_region = aggregate_by_region(emissions_arr.values, region_items)
     population_by_region = aggregate_by_region(population_arr.values, region_items)
@@ -126,7 +118,7 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def make_star_trace(regional_data: dict, xref: str, yref: str) -> go.Scatter:
+def make_marker_trace(regional_data: dict, xref: str, yref: str) -> go.Scatter:
     """Slim vertical tick marks at each region's cumulative value up to the marker years."""
     marker_years = [CUMULATIVE_MARKER_YEAR_HISTORICAL, *CUMULATIVE_MARKER_YEARS]
     xs = [regional_data[r]["markers"][year] for r in AGG_REGION_ORDER for year in marker_years]
@@ -143,8 +135,11 @@ def make_star_trace(regional_data: dict, xref: str, yref: str) -> go.Scatter:
     )
 
 
-def make_star_annotations(regional_data: dict, xref: str, yref: str) -> list[dict]:
-    """Year labels for the marker ticks, placed above the top-most region only."""
+def make_marker_annotations(regional_data: dict, xref: str, yref: str) -> list[dict]:
+    """Year labels for the marker ticks, placed above the top-most region only.
+
+    Alternating heights, because consecutive marker years can land close together.
+    """
     top_region = AGG_REGION_ORDER[-1]
     marker_years = [CUMULATIVE_MARKER_YEAR_HISTORICAL, *CUMULATIVE_MARKER_YEARS]
     return [
@@ -155,23 +150,26 @@ def make_star_annotations(regional_data: dict, xref: str, yref: str) -> list[dic
             yref=yref,
             text=str(year),
             showarrow=False,
-            yshift=13,
+            yshift=13 if index % 2 == 0 else 28,
             font=dict(size=10.5, color=MARKER_COLOR),
         )
-        for year in marker_years
+        for index, year in enumerate(marker_years)
     ]
 
 
 def make_ce_annotations(regional_data: dict, ce_data: dict, xref: str, yref: str) -> list[dict]:
-    """Slim arrow from each region's bar end to its CE counterpart's value, below its box."""
+    """Slim arrow from each region's bar end to its CE counterpart's value, below its box.
+
+    Each bar end is that scenario's own hist + future, so the arrow stays correct even if the
+    historical segments of the base and CE runs ever diverge.
+    """
     annotations = []
     for r in AGG_REGION_ORDER:
-        hist_val = regional_data[r]["hist"]
         annotations.append(
             dict(
-                x=hist_val + ce_data[r]["future"],
+                x=ce_data[r]["hist"] + ce_data[r]["future"],
                 y=r,
-                ax=hist_val + regional_data[r]["future"],
+                ax=regional_data[r]["hist"] + regional_data[r]["future"],
                 ay=r,
                 xref=xref,
                 yref=yref,
@@ -196,13 +194,12 @@ def make_ce_savings_box(regional_data: dict, ce_data: dict, xref: str, yref: str
     y = []
     colors = []
     for r in AGG_REGION_ORDER:
-        hist_val = regional_data[r]["hist"]
-        start = hist_val + ce_data[r]["future"]
-        end = hist_val + regional_data[r]["future"]
+        start = ce_data[r]["hist"] + ce_data[r]["future"]
+        end = regional_data[r]["hist"] + regional_data[r]["future"]
         x.append(end - start)
         base.append(start)
         y.append(r)
-        colors.append(shade(REGION_COLORS[r], 0.55))
+        colors.append(shade(REGION_COLORS[r], CE_SHADE))
     return go.Bar(
         orientation="h",
         x=x,
@@ -216,7 +213,9 @@ def make_ce_savings_box(regional_data: dict, ce_data: dict, xref: str, yref: str
     )
 
 
-def make_topbar_callouts(regional_data: dict, ce_data: dict | None, xref: str, yref: str) -> list[dict]:
+def make_topbar_callouts(
+    regional_data: dict, ce_data: dict | None, xref: str, yref: str
+) -> list[dict]:
     """Inline callouts on the top-most region's bar explaining historical/future/CE savings."""
     top_region = AGG_REGION_ORDER[-1]
     hist_val = regional_data[top_region]["hist"]
@@ -259,7 +258,8 @@ def make_topbar_callouts(regional_data: dict, ce_data: dict | None, xref: str, y
         ),
     ]
     if ce_data:
-        savings_mid = hist_val + (ce_data[top_region]["future"] + future_val) / 2
+        ce_end = ce_data[top_region]["hist"] + ce_data[top_region]["future"]
+        savings_mid = (ce_end + hist_val + future_val) / 2
         callouts.append(
             dict(
                 x=savings_mid,
@@ -267,7 +267,9 @@ def make_topbar_callouts(regional_data: dict, ce_data: dict | None, xref: str, y
                 xref=xref,
                 yref=yref,
                 ax=savings_mid,
-                ay=-58,
+                # Shorter leader than the other two: the savings box sits right next to the
+                # end of the future segment, so equal leaders would overlap its label.
+                ay=-30,
                 axref=xref,
                 ayref="pixel",
                 text="CE savings",
@@ -298,13 +300,21 @@ def make_panel_bars(regional_data: dict, xref: str, yref: str) -> list[go.Bar]:
         y=AGG_REGION_ORDER,
         xaxis=xref,
         yaxis=yref,
-        marker=dict(color=[REGION_COLORS[r] for r in AGG_REGION_ORDER], line=dict(color="white", width=1)),
+        marker=dict(
+            color=[REGION_COLORS[r] for r in AGG_REGION_ORDER], line=dict(color="white", width=1)
+        ),
         showlegend=False,
     )
     return [hist_bar, future_bar]
 
 
-def plot_scenario(ssp: str, regional_data: dict, percapita_data: dict, ce_data: dict | None, ce_percapita_data: dict | None):
+def plot_scenario(
+    ssp: str,
+    regional_data: dict,
+    percapita_data: dict,
+    ce_data: dict | None,
+    ce_percapita_data: dict | None,
+):
     """Two-panel figure: per-capita (left, with callouts) and absolute (right, with period markers)."""
     fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.05)
 
@@ -318,8 +328,8 @@ def plot_scenario(ssp: str, regional_data: dict, percapita_data: dict, ce_data: 
     if ce_data:
         traces.append(make_ce_savings_box(regional_data, ce_data, "x2", "y2"))
         annotations += make_ce_annotations(regional_data, ce_data, "x2", "y2")
-    traces.append(make_star_trace(regional_data, "x2", "y2"))
-    annotations += make_star_annotations(regional_data, "x2", "y2")
+    traces.append(make_marker_trace(regional_data, "x2", "y2"))
+    annotations += make_marker_annotations(regional_data, "x2", "y2")
 
     for trace in traces:
         fig.add_trace(trace)
@@ -331,7 +341,10 @@ def plot_scenario(ssp: str, regional_data: dict, percapita_data: dict, ce_data: 
         plot_bgcolor="rgba(0,0,0,0)",
         title=dict(text=SSP_LABELS[ssp], font=dict(size=16), x=0, xanchor="left"),
         xaxis=dict(
-            title=dict(text="Per capita 1900\u20132100 (t CO\u2082/cap)", font=dict(size=13)),
+            title=dict(
+                text=f"Per capita {FIRST_MODEL_YEAR}\u20132100 (t CO\u2082/cap)",
+                font=dict(size=13),
+            ),
             tickfont=dict(size=12),
             showgrid=True,
             gridcolor="#e8e8e8",
@@ -339,7 +352,9 @@ def plot_scenario(ssp: str, regional_data: dict, percapita_data: dict, ce_data: 
             zeroline=False,
         ),
         xaxis2=dict(
-            title=dict(text="Absolute 1900\u20132100 (Gt CO\u2082)", font=dict(size=13)),
+            title=dict(
+                text=f"Absolute {FIRST_MODEL_YEAR}\u20132100 (Gt CO\u2082)", font=dict(size=13)
+            ),
             tickfont=dict(size=12),
             showgrid=True,
             gridcolor="#e8e8e8",

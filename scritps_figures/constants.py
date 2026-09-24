@@ -9,9 +9,13 @@ FIRST_MODEL_YEAR = 1900
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
-# Cumulative-value marker years for figures 7 and 8 (absolute variants only)
+# Cumulative-value marker years for figure 8 (absolute panel only)
 CUMULATIVE_MARKER_YEARS = [2050, 2070]
-CUMULATIVE_MARKER_YEAR_HISTORICAL = 1990  # figure 8 only
+CUMULATIVE_MARKER_YEAR_HISTORICAL = 1990
+
+# Lightening applied to a bar's own colour for the circular-economy savings boxes
+# (figures 7 and 8), so both figures render the same annotation the same way.
+CE_SHADE = 0.55
 
 CEMENT_PICKLENAME = "figs_cement_SSP2_h12/model.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME

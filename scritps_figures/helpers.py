@@ -2,6 +2,10 @@ import pickle
 import warnings
 from pathlib import Path
 
+import numpy as np
+
+from constants import AGG_REGION_ORDER, AGG_REGIONS
+
 # Shading range shared across figure scripts (darkest -> lightest function shade).
 SHADE_MIN, SHADE_MAX = -0.30, 0.45
 
@@ -49,7 +53,9 @@ def load_model(source_pickle: Path) -> object:
             return pickle.load(file_handle)
 
 
-def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False) -> dict[str, object]:
+def load_mfas(
+    source_pickle: Path, cache_dir: Path, force_refresh: bool = False
+) -> dict[str, object]:
     """Load the MFAs / stocks needed for the figures, caching them next to the source pickle.
 
     Returns a dict with:
@@ -85,3 +91,47 @@ def load_mfas(source_pickle: Path, cache_dir: Path, force_refresh: bool = False)
             pickle.dump(mfas[label], file_handle)
 
     return mfas
+
+
+def cement_demand(mfa) -> object:
+    """Regional market cement demand (t) with dims (t, r).
+
+    The cement that ends up in products plus the construction losses that go with it, i.e.
+    the model's ``market_cement => prod_product`` plus ``market_cement => sysenv``. This is
+    consumption-based: cement produced for export is counted in the importing region.
+
+    Pass the reconciled (combined) MFA, so that the reconciled ``cement_losses`` is used.
+    """
+    into_products = mfa.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
+    return into_products / (1.0 - mfa.parameters["cement_losses"])
+
+
+def process_emissions(demand, parameters) -> object:
+    """Gross process CO2 (t) from calcination, with the dims of `demand`.
+
+    Mirrors the ``prod_clinker => atmosphere`` flow of the carbonation model: the CO2
+    released from the CaO in clinker, plus the CO2 from the CaO in the cement kiln dust
+    that is generated alongside it (``clinker_losses`` is additional to the clinker that
+    reaches the market, not a share of it). Applied to demand rather than to the clinker
+    production flow, so emissions are attributed to the consuming region.
+    """
+    clinker = demand * parameters["clinker_ratio"]
+    cao_per_clinker = (
+        parameters["clinker_cao_ratio"] + parameters["clinker_losses"] * parameters["ckd_cao_ratio"]
+    )
+    return clinker * cao_per_clinker * parameters["cao_emission_factor"]
+
+
+def aggregate_by_region(values: np.ndarray, region_items: np.ndarray) -> dict[str, np.ndarray]:
+    """Sum a (t, r) array's source regions into the aggregated regions of `AGG_REGIONS`.
+
+    Returns one time series per aggregated region, in `AGG_REGION_ORDER`.
+    """
+    unmapped = sorted(set(str(region) for region in region_items) - set(AGG_REGIONS))
+    if unmapped:
+        raise ValueError(f"Regions missing from AGG_REGIONS: {', '.join(unmapped)}")
+
+    result = {agg_region: np.zeros(values.shape[0]) for agg_region in AGG_REGION_ORDER}
+    for source_region, agg_region in AGG_REGIONS.items():
+        result[agg_region] += values[:, region_items == source_region].sum(axis=1)
+    return result

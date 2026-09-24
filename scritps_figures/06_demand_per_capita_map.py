@@ -2,9 +2,17 @@
 
 Choropleth maps in which each country is shaded by the cumulative future cement demand of its
 REMIND H12 region over 2024-2100, from the reconciled (combined) MFA. Four variants are produced:
-per-capita demand (annual regional demand divided by that year's population, summed over the
-future years; t/cap), total demand (annual regional demand summed over the future years; Gt),
-and the corresponding process CO2 emissions (clinker demand times the clinker emission factor).
+per-capita demand, total demand (Gt), and the corresponding gross process CO2 emissions.
+
+Demand is the region's market cement demand (cement going into products plus construction
+losses) and emissions are the calcination CO2 of the clinker and cement kiln dust needed for
+it, both as defined in `helpers.cement_demand` / `helpers.process_emissions`. Emissions are
+therefore attributed to the consuming region.
+
+The per-capita variants sum the annual ratio (that year's regional value divided by that
+year's regional population) over the future years. That is an average annual rate multiplied
+by the number of years, not the cumulative total divided by a single population figure.
+
 Countries are assigned to regions via the REMIND H12 regionmapping (`scritps_figures/h12.csv`).
 Saved as PNGs in `data/cement/output/figures`.
 
@@ -24,18 +32,19 @@ from constants import (
     SSP_CACHE_DIRS,
     SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas
+from helpers import cement_demand, load_mfas, process_emissions
 
 GT_PER_T = 1e-9
+FIRST_FUTURE_YEAR = LAST_HISTORICAL_YEAR + 1
 
 mfas = load_mfas(SSP_SOURCE_PICKLES["SSP2"], SSP_CACHE_DIRS["SSP2"])
 combined = mfas["combined"]
-td = mfas["td"]
+# All parameters are taken from the reconciled MFA, so that reconciled values
+# (cement_losses in particular) are the ones used here.
+prm = combined.parameters
 
-
-def regional_demand():
-    """Combined cement demand (t) with dims (t, r)."""
-    return combined.stocks["in_use"].inflow[{"k": "cement"}].sum_to(("t", "r"))
+demand = cement_demand(combined)
+emissions = process_emissions(demand, prm)
 
 
 def sum_future_years(array) -> dict[str, float]:
@@ -48,34 +57,22 @@ def sum_future_years(array) -> dict[str, float]:
 
 def cumulative_per_capita_demand() -> dict[str, float]:
     """Sum of annual per-capita cement demand (t/cap) over the future years, per region."""
-    return sum_future_years(regional_demand() / td.parameters["population"])
+    return sum_future_years(demand / prm["population"])
 
 
 def cumulative_total_demand() -> dict[str, float]:
     """Cumulative cement demand (Gt) over the future years, per region."""
-    return sum_future_years(regional_demand() * GT_PER_T)
-
-
-def process_emissions():
-    """Process CO2 emissions (t) with dims (t, r): clinker demand times the clinker
-    emission factor (CaO content times CO2 released per CaO, as in the carbonation model)."""
-    prm = td.parameters
-    return (
-        regional_demand()
-        * prm["clinker_ratio"]
-        * prm["clinker_cao_ratio"]
-        * prm["cao_emission_factor"]
-    )
+    return sum_future_years(demand * GT_PER_T)
 
 
 def cumulative_process_emissions_per_capita() -> dict[str, float]:
     """Sum of annual per-capita process emissions (t CO2/cap) over the future years, per region."""
-    return sum_future_years(process_emissions() / td.parameters["population"])
+    return sum_future_years(emissions / prm["population"])
 
 
 def cumulative_process_emissions_total() -> dict[str, float]:
     """Cumulative process emissions (Gt CO2) over the future years, per region."""
-    return sum_future_years(process_emissions() * GT_PER_T)
+    return sum_future_years(emissions * GT_PER_T)
 
 
 def country_table(region_values: dict[str, float], unit: str) -> pd.DataFrame:
@@ -146,25 +143,25 @@ def plot_map(region_values: dict[str, float], colorbar_title: str, unit: str, ou
 
 plot_map(
     cumulative_per_capita_demand(),
-    colorbar_title="Cumulative cement demand<br>2024–2100 (t per capita)",
+    colorbar_title=f"Cumulative cement demand<br>{FIRST_FUTURE_YEAR}–2100 (t per capita)",
     unit="t per capita",
     output_name="fig6_demand_per_capita_map",
 )
 plot_map(
     cumulative_total_demand(),
-    colorbar_title="Cumulative cement demand<br>2024–2100 (Gt)",
+    colorbar_title=f"Cumulative cement demand<br>{FIRST_FUTURE_YEAR}–2100 (Gt)",
     unit="Gt",
     output_name="fig6_demand_total_map",
 )
 plot_map(
     cumulative_process_emissions_per_capita(),
-    colorbar_title="Cumulative process emissions<br>2024–2100 (t CO₂ per capita)",
+    colorbar_title=f"Cumulative process emissions<br>{FIRST_FUTURE_YEAR}–2100 (t CO₂ per capita)",
     unit="t CO₂ per capita",
     output_name="fig6_process_emissions_per_capita_map",
 )
 plot_map(
     cumulative_process_emissions_total(),
-    colorbar_title="Cumulative process emissions<br>2024–2100 (Gt CO₂)",
+    colorbar_title=f"Cumulative process emissions<br>{FIRST_FUTURE_YEAR}–2100 (Gt CO₂)",
     unit="Gt CO₂",
     output_name="fig6_process_emissions_total_map",
 )
