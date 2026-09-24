@@ -1,10 +1,11 @@
 """Figure 7: cumulative future cement demand and process CO2 emissions by scenario.
 
-Horizontal bar charts comparing all 7 SSP scenarios (SSP1–5 plus SSP1_CE and SSP2_CE)
-by their global cumulative value over 2024–2100. Two variants are produced: total cement
-demand (Gt) and gross process CO2 emissions (Gt CO2, from clinker production). Scenarios
-are sorted ascending by cumulative emissions so the lowest-emission scenario sits at the
-bottom of the y-axis. CE variants are visually distinguished by diagonal hatching.
+Horizontal bar charts comparing the 5 SSP scenarios by their global cumulative value
+over 2024–2100. Two variants are produced: total cement demand (Gt) and gross process
+CO2 emissions (Gt CO2, from clinker production). Scenarios are ordered SSP1 (bottom) to
+SSP5 (top) on the y-axis.
+The reduction achieved by the SSP1_CE / SSP2_CE circular-economy variants is shown as
+an arrow pointing from the SSP1/SSP2 bar end towards the corresponding CE value.
 Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
@@ -67,18 +68,39 @@ def make_bar(sorted_ssps: list[str], scenario_data: dict, key: str) -> go.Bar:
         orientation="h",
         x=[scenario_data[ssp][key] for ssp in sorted_ssps],
         y=[SSP_LABELS[ssp] for ssp in sorted_ssps],
-        marker=dict(
-            color=[SSP_COLORS[ssp] for ssp in sorted_ssps],
-            pattern=dict(
-                shape=["/" if ssp.endswith("_CE") else "" for ssp in sorted_ssps],
-                fgcolor="white",
-                size=5,
-            ),
-        ),
+        marker=dict(color=[SSP_COLORS[ssp] for ssp in sorted_ssps]),
     )
 
 
-def make_layout(xaxis_title: str) -> dict:
+def make_ce_annotations(sorted_ssps: list[str], scenario_data: dict, key: str) -> list[dict]:
+    """Arrow from each SSP1/SSP2 bar end to its CE counterpart's value."""
+    annotations = []
+    for ssp in sorted_ssps:
+        ce_ssp = f"{ssp}_CE"
+        if ce_ssp not in scenario_data:
+            continue
+        annotations.append(
+            dict(
+                x=scenario_data[ce_ssp][key],
+                y=SSP_LABELS[ssp],
+                ax=scenario_data[ssp][key],
+                ay=SSP_LABELS[ssp],
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=3,
+                arrowsize=1.2,
+                arrowwidth=2,
+                arrowcolor="black",
+                text="",
+            )
+        )
+    return annotations
+
+
+def make_layout(xaxis_title: str, annotations: list[dict]) -> dict:
     return dict(
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -91,23 +113,29 @@ def make_layout(xaxis_title: str) -> dict:
         margin=dict(l=110, r=40, t=30, b=60),
         bargap=0.35,
         showlegend=False,
+        annotations=annotations,
     )
 
 
 def plot_demand(sorted_ssps: list[str], scenario_data: dict):
     fig = go.Figure(make_bar(sorted_ssps, scenario_data, "demand"))
-    fig.update_layout(**make_layout("Cumulative cement demand 2024–2100 (Gt)"))
+    annotations = make_ce_annotations(sorted_ssps, scenario_data, "demand")
+    fig.update_layout(**make_layout("Cumulative cement demand 2024–2100 (Gt)", annotations))
     save(fig, "fig7_cumulative_demand", width=700, height=450)
 
 
 def plot_emissions(sorted_ssps: list[str], scenario_data: dict):
     fig = go.Figure(make_bar(sorted_ssps, scenario_data, "emissions"))
-    fig.update_layout(**make_layout("Cumulative process CO₂ emissions 2024–2100 (Gt CO₂)"))
+    annotations = make_ce_annotations(sorted_ssps, scenario_data, "emissions")
+    fig.update_layout(
+        **make_layout("Cumulative process CO₂ emissions 2024–2100 (Gt CO₂)", annotations)
+    )
     save(fig, "fig7_cumulative_process_emissions", width=700, height=450)
 
 
 scenario_data = load_scenario_data()
-sorted_ssps = sorted(scenario_data, key=lambda s: scenario_data[s]["emissions"])
+# SSP1 at the bottom through SSP5 at the top
+sorted_ssps = sorted(ssp for ssp in scenario_data if not ssp.endswith("_CE"))
 
 plot_demand(sorted_ssps, scenario_data)
 plot_emissions(sorted_ssps, scenario_data)
