@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pyam
+
 PATH_CEMENT = Path("data_out")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
@@ -189,16 +191,20 @@ SSP_PICKLENAMES = {
 }
 SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
 SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}
+
+SSP_PALETTE = [
+    pyam.plotting.PYAM_COLORS[f"AR6-{ssp}"] for ssp in ("SSP1", "SSP2", "SSP3", "SSP4", "SSP5")
+]
 SSP_COLORS = {
-    "SSP1": "#2166AC",  # blue
-    "SSP2": "#4DAC26",  # green
-    "SSP3": "#D01C8B",  # magenta
-    "SSP4": "#F1A340",  # orange
-    "SSP5": "#762A83",  # purple
-    # Circular-economy variants share their parent SSP hue; distinguished by a dashed line.
-    "SSP1_CE": "#2166AC",  # blue (SSP1 variant)
-    "SSP2_CE": "#4DAC26",  # green (SSP2 variant)
+    ssp: color for ssp, color in zip(("SSP1", "SSP2", "SSP3", "SSP4", "SSP5"), SSP_PALETTE)
 }
+SSP_COLORS.update(
+    {
+        # Circular-economy variants share their parent SSP hue; distinguished by a dashed line.
+        "SSP1_CE": SSP_COLORS["SSP1"],
+        "SSP2_CE": SSP_COLORS["SSP2"],
+    }
+)
 
 # Line-dash style per scenario: CE variants dashed, base SSPs solid.
 SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SSP_PICKLENAMES}
