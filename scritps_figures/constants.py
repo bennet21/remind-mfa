@@ -5,6 +5,7 @@ import pyam
 PATH_CEMENT = Path("data_out")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
+FIRST_MODEL_YEAR = 1900
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
@@ -96,6 +97,18 @@ AGG_REGION_ORDER = [
     "China",
     "OECD",
 ]
+
+# Fixed per-region colors for distinguishing aggregated regions (e.g. figure 8)
+AGG_REGION_COLORS = {
+    "Sub-Saharan Africa": "#70A0CD",
+    "S & SE Asia": "#C47900",
+    "Rest of the World": "#B2B2B2",
+    "China": "#003466",
+    "OECD": "#004F00",
+}
+
+# Neutral warm taupe for historical segments, distinct from the AGG_REGION_COLORS palette
+HISTORICAL_COLOR = "#8C7B6B"
 
 COLOR_PALETTE_1 = [
     "#6929c4",  # Purple

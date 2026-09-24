@@ -1,13 +1,14 @@
 """Figure 8: cumulative process CO2 emissions by aggregated region, one figure per scenario.
 
-For each of the 5 SSP scenarios, a horizontal bar chart shows the 5 aggregated regions,
-each bar split into a gray historical segment (up to and including LAST_HISTORICAL_YEAR)
-and a colored future segment (2024-2100). For SSP1 and SSP2, the reduction achieved by the
-corresponding _CE circular-economy variant is shown as an arrow per region.
-Two variants are produced: total cumulative emissions (Gt CO2) and cumulative emissions
-per capita (t CO2/cap, annual per-capita emissions summed over the years in each segment).
-The total-emissions variant also shows vertical tick marks for the cumulative value up to
-CUMULATIVE_MARKER_YEAR_HISTORICAL and each of CUMULATIVE_MARKER_YEARS (constants.py).
+For each of the 5 SSP scenarios, a two-panel horizontal bar chart shows the 5 aggregated
+regions. The left panel is per-capita cumulative emissions (t CO2/cap); the right panel is
+absolute cumulative emissions (Gt CO2). Each bar is split into a gray historical segment
+(FIRST_MODEL_YEAR-LAST_HISTORICAL_YEAR) and a colored future segment (2024-2100). For SSP1
+and SSP2, the reduction achieved by the corresponding _CE circular-economy variant is shown
+as a slim arrow (below its box) plus a lightly shaded box per region. The left panel carries
+inline callouts explaining historical/future/CE savings; the right panel instead marks the
+cumulative value up to CUMULATIVE_MARKER_YEAR_HISTORICAL and each of CUMULATIVE_MARKER_YEARS
+(constants.py) with star markers, to avoid repeating the same explanation twice.
 Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
@@ -16,24 +17,29 @@ Run from the repository root:
 
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from constants import (
+    AGG_REGION_COLORS,
     AGG_REGION_ORDER,
     AGG_REGIONS,
-    COLOR_PALETTE_3,
     CUMULATIVE_MARKER_YEAR_HISTORICAL,
     CUMULATIVE_MARKER_YEARS,
     FIGURES_DIR,
+    FIRST_MODEL_YEAR,
+    HISTORICAL_COLOR,
     LAST_HISTORICAL_YEAR,
     SSP_CACHE_DIRS,
     SSP_LABELS,
     SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas
+from helpers import load_mfas, shade
 
 GT_PER_T = 1e-9
-HISTORICAL_COLOR = "#a0a0a0"
-REGION_COLORS = dict(zip(AGG_REGION_ORDER, COLOR_PALETTE_3))
+REGION_COLORS = AGG_REGION_COLORS
+ARROW_COLOR = "#1a1a1a"
+CALLOUT_COLOR = "#555555"
+MARKER_COLOR = "#222222"
 
 
 def aggregate_by_region(values: np.ndarray, region_items: np.ndarray) -> dict[str, np.ndarray]:
@@ -120,40 +126,44 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def make_marker_trace(regional_data: dict) -> go.Scatter:
-    """Vertical tick marks at each region's cumulative value up to the marker years."""
+def make_star_trace(regional_data: dict, xref: str, yref: str) -> go.Scatter:
+    """Slim vertical tick marks at each region's cumulative value up to the marker years."""
     marker_years = [CUMULATIVE_MARKER_YEAR_HISTORICAL, *CUMULATIVE_MARKER_YEARS]
     xs = [regional_data[r]["markers"][year] for r in AGG_REGION_ORDER for year in marker_years]
     ys = [r for r in AGG_REGION_ORDER for _ in marker_years]
     return go.Scatter(
         x=xs,
         y=ys,
+        xaxis=xref,
+        yaxis=yref,
         mode="markers",
-        marker=dict(symbol="line-ns", size=24, line=dict(width=2, color="black")),
+        marker=dict(symbol="line-ns", size=13, line=dict(width=1.4, color=MARKER_COLOR)),
         hoverinfo="skip",
         showlegend=False,
     )
 
 
-def make_marker_annotations(regional_data: dict) -> list[dict]:
-    """Year labels for the marker ticks, placed below the bottom-most region only."""
-    bottom_region = AGG_REGION_ORDER[0]
+def make_star_annotations(regional_data: dict, xref: str, yref: str) -> list[dict]:
+    """Year labels for the marker ticks, placed above the top-most region only."""
+    top_region = AGG_REGION_ORDER[-1]
     marker_years = [CUMULATIVE_MARKER_YEAR_HISTORICAL, *CUMULATIVE_MARKER_YEARS]
     return [
         dict(
-            x=regional_data[bottom_region]["markers"][year],
-            y=bottom_region,
+            x=regional_data[top_region]["markers"][year],
+            y=top_region,
+            xref=xref,
+            yref=yref,
             text=str(year),
             showarrow=False,
-            yshift=-28,
-            font=dict(size=11, color="black"),
+            yshift=13,
+            font=dict(size=10.5, color=MARKER_COLOR),
         )
         for year in marker_years
     ]
 
 
-def make_ce_annotations(regional_data: dict, ce_data: dict) -> list[dict]:
-    """Arrow from each region's bar end to its CE counterpart's value."""
+def make_ce_annotations(regional_data: dict, ce_data: dict, xref: str, yref: str) -> list[dict]:
+    """Slim arrow from each region's bar end to its CE counterpart's value, below its box."""
     annotations = []
     for r in AGG_REGION_ORDER:
         hist_val = regional_data[r]["hist"]
@@ -163,66 +173,188 @@ def make_ce_annotations(regional_data: dict, ce_data: dict) -> list[dict]:
                 y=r,
                 ax=hist_val + regional_data[r]["future"],
                 ay=r,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
+                xref=xref,
+                yref=yref,
+                axref=xref,
+                ayref=yref,
+                yshift=-11,
                 showarrow=True,
-                arrowhead=3,
-                arrowsize=1.2,
-                arrowwidth=2,
-                arrowcolor="black",
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.6,
+                arrowcolor=ARROW_COLOR,
                 text="",
             )
         )
     return annotations
 
 
-def plot_scenario(
-    ssp: str,
-    regional_data: dict,
-    xaxis_title: str,
-    output_prefix: str,
-    ce_data: dict | None = None,
-    show_markers: bool = False,
-):
+def make_ce_savings_box(regional_data: dict, ce_data: dict, xref: str, yref: str) -> go.Bar:
+    """Lightly shaded box spanning each region's CE savings, in a lighter tone of its own color."""
+    x = []
+    base = []
+    y = []
+    colors = []
+    for r in AGG_REGION_ORDER:
+        hist_val = regional_data[r]["hist"]
+        start = hist_val + ce_data[r]["future"]
+        end = hist_val + regional_data[r]["future"]
+        x.append(end - start)
+        base.append(start)
+        y.append(r)
+        colors.append(shade(REGION_COLORS[r], 0.55))
+    return go.Bar(
+        orientation="h",
+        x=x,
+        base=base,
+        y=y,
+        xaxis=xref,
+        yaxis=yref,
+        marker=dict(color=colors),
+        showlegend=False,
+        hoverinfo="skip",
+    )
+
+
+def make_topbar_callouts(regional_data: dict, ce_data: dict | None, xref: str, yref: str) -> list[dict]:
+    """Inline callouts on the top-most region's bar explaining historical/future/CE savings."""
+    top_region = AGG_REGION_ORDER[-1]
+    hist_val = regional_data[top_region]["hist"]
+    future_val = regional_data[top_region]["future"]
+
+    callouts = [
+        dict(
+            x=hist_val / 2,
+            y=top_region,
+            xref=xref,
+            yref=yref,
+            ax=hist_val / 2,
+            ay=-58,
+            axref=xref,
+            ayref="pixel",
+            text=f"Historical<br>({FIRST_MODEL_YEAR}\u2013{LAST_HISTORICAL_YEAR})",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1,
+            arrowcolor=CALLOUT_COLOR,
+            font=dict(size=10.5, color=CALLOUT_COLOR),
+            align="center",
+        ),
+        dict(
+            x=hist_val + future_val / 2,
+            y=top_region,
+            xref=xref,
+            yref=yref,
+            ax=hist_val + future_val / 2,
+            ay=-58,
+            axref=xref,
+            ayref="pixel",
+            text=f"Future<br>({LAST_HISTORICAL_YEAR + 1}\u20132100)",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1,
+            arrowcolor=CALLOUT_COLOR,
+            font=dict(size=10.5, color=CALLOUT_COLOR),
+            align="center",
+        ),
+    ]
+    if ce_data:
+        savings_mid = hist_val + (ce_data[top_region]["future"] + future_val) / 2
+        callouts.append(
+            dict(
+                x=savings_mid,
+                y=top_region,
+                xref=xref,
+                yref=yref,
+                ax=savings_mid,
+                ay=-58,
+                axref=xref,
+                ayref="pixel",
+                text="CE savings",
+                showarrow=True,
+                arrowhead=0,
+                arrowwidth=1,
+                arrowcolor=CALLOUT_COLOR,
+                font=dict(size=10.5, color=CALLOUT_COLOR),
+                align="center",
+            )
+        )
+    return callouts
+
+
+def make_panel_bars(regional_data: dict, xref: str, yref: str) -> list[go.Bar]:
     hist_bar = go.Bar(
         orientation="h",
         x=[regional_data[r]["hist"] for r in AGG_REGION_ORDER],
         y=AGG_REGION_ORDER,
-        marker=dict(color=HISTORICAL_COLOR),
-        name=f"Historical (until {LAST_HISTORICAL_YEAR})",
+        xaxis=xref,
+        yaxis=yref,
+        marker=dict(color=HISTORICAL_COLOR, line=dict(color="white", width=1)),
+        showlegend=False,
     )
     future_bar = go.Bar(
         orientation="h",
         x=[regional_data[r]["future"] for r in AGG_REGION_ORDER],
         y=AGG_REGION_ORDER,
-        marker=dict(color=[REGION_COLORS[r] for r in AGG_REGION_ORDER]),
-        name=f"Future ({LAST_HISTORICAL_YEAR + 1}\u20132100)",
+        xaxis=xref,
+        yaxis=yref,
+        marker=dict(color=[REGION_COLORS[r] for r in AGG_REGION_ORDER], line=dict(color="white", width=1)),
+        showlegend=False,
     )
-    traces = [hist_bar, future_bar]
-    annotations = make_ce_annotations(regional_data, ce_data) if ce_data else []
-    if show_markers:
-        traces.append(make_marker_trace(regional_data))
-        annotations += make_marker_annotations(regional_data)
-    fig = go.Figure(traces)
+    return [hist_bar, future_bar]
+
+
+def plot_scenario(ssp: str, regional_data: dict, percapita_data: dict, ce_data: dict | None, ce_percapita_data: dict | None):
+    """Two-panel figure: per-capita (left, with callouts) and absolute (right, with period markers)."""
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.05)
+
+    traces = make_panel_bars(percapita_data, "x", "y")
+    annotations = make_topbar_callouts(percapita_data, ce_percapita_data, "x", "y")
+    if ce_percapita_data:
+        traces.append(make_ce_savings_box(percapita_data, ce_percapita_data, "x", "y"))
+        annotations += make_ce_annotations(percapita_data, ce_percapita_data, "x", "y")
+
+    traces += make_panel_bars(regional_data, "x2", "y2")
+    if ce_data:
+        traces.append(make_ce_savings_box(regional_data, ce_data, "x2", "y2"))
+        annotations += make_ce_annotations(regional_data, ce_data, "x2", "y2")
+    traces.append(make_star_trace(regional_data, "x2", "y2"))
+    annotations += make_star_annotations(regional_data, "x2", "y2")
+
+    for trace in traces:
+        fig.add_trace(trace)
+
     fig.update_layout(
-        template="plotly_white",
+        template="simple_white",
+        font=dict(family="Arial, sans-serif", size=13, color="#222222"),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        title=dict(text=SSP_LABELS[ssp], font=dict(size=16)),
+        title=dict(text=SSP_LABELS[ssp], font=dict(size=16), x=0, xanchor="left"),
         xaxis=dict(
-            title=dict(text=xaxis_title, font=dict(size=14)),
+            title=dict(text="Per capita 1900\u20132100 (t CO\u2082/cap)", font=dict(size=13)),
             tickfont=dict(size=12),
+            showgrid=True,
+            gridcolor="#e8e8e8",
+            gridwidth=1,
+            zeroline=False,
         ),
-        yaxis=dict(tickfont=dict(size=12)),
-        margin=dict(l=140, r=40, t=50, b=60),
-        bargap=0.35,
+        xaxis2=dict(
+            title=dict(text="Absolute 1900\u20132100 (Gt CO\u2082)", font=dict(size=13)),
+            tickfont=dict(size=12),
+            showgrid=True,
+            gridcolor="#e8e8e8",
+            gridwidth=1,
+            zeroline=False,
+        ),
+        yaxis=dict(tickfont=dict(size=12), ticks=""),
+        yaxis2=dict(tickfont=dict(size=12), ticks="", showticklabels=False),
+        margin=dict(l=140, r=30, t=100, b=55),
+        bargap=0.42,
         barmode="stack",
         showlegend=False,
         annotations=annotations,
     )
-    save(fig, f"{output_prefix}_{ssp}", width=700, height=400)
+    save(fig, f"fig8_regional_cumulative_emissions_{ssp}", width=1000, height=430)
 
 
 base_ssps = [ssp for ssp in SSP_SOURCE_PICKLES if not ssp.endswith("_CE")]
@@ -240,20 +372,6 @@ for ssp in base_ssps:
         ce_data = load_regional_emissions(ce_ssp)
         ce_percapita_data = load_regional_emissions_per_capita(ce_ssp)
 
-    plot_scenario(
-        ssp,
-        regional_data,
-        "Cumulative process CO₂ emissions 1900–2100 (Gt CO₂)",
-        "fig8_regional_cumulative_emissions",
-        ce_data,
-        show_markers=True,
-    )
-    plot_scenario(
-        ssp,
-        percapita_data,
-        "Cumulative process CO₂ emissions per capita 1900–2100 (t CO₂/cap)",
-        "fig8_regional_cumulative_emissions_percapita",
-        ce_percapita_data,
-    )
+    plot_scenario(ssp, regional_data, percapita_data, ce_data, ce_percapita_data)
 
 print("END")
