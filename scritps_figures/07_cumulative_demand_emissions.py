@@ -6,6 +6,8 @@ CO2 emissions (Gt CO2, from clinker production). Scenarios are ordered SSP1 (bot
 SSP5 (top) on the y-axis.
 The reduction achieved by the SSP1_CE / SSP2_CE circular-economy variants is shown as
 an arrow pointing from the SSP1/SSP2 bar end towards the corresponding CE value.
+Vertical tick marks show each bar's cumulative value up to the years in
+CUMULATIVE_MARKER_YEARS (constants.py).
 Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
@@ -16,6 +18,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from constants import (
+    CUMULATIVE_MARKER_YEARS,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     SSP_CACHE_DIRS,
@@ -51,7 +54,13 @@ def load_scenario_data() -> dict[str, dict[str, float]]:
         result[ssp] = {
             "demand": demand_arr.values[future].sum() * GT_PER_T,
             "emissions": emissions_arr.values[future].sum() * GT_PER_T,
+            "marker_demand": {},
+            "marker_emissions": {},
         }
+        for year in CUMULATIVE_MARKER_YEARS:
+            up_to_year = future & (years <= year)
+            result[ssp]["marker_demand"][year] = demand_arr.values[up_to_year].sum() * GT_PER_T
+            result[ssp]["marker_emissions"][year] = emissions_arr.values[up_to_year].sum() * GT_PER_T
         print(f"  demand: {result[ssp]['demand']:.1f} Gt,  emissions: {result[ssp]['emissions']:.1f} Gt CO2")
     return result
 
@@ -70,6 +79,40 @@ def make_bar(sorted_ssps: list[str], scenario_data: dict, key: str) -> go.Bar:
         y=[SSP_LABELS[ssp] for ssp in sorted_ssps],
         marker=dict(color=[SSP_COLORS[ssp] for ssp in sorted_ssps]),
     )
+
+
+def make_marker_trace(sorted_ssps: list[str], scenario_data: dict, key: str) -> go.Scatter:
+    """Vertical tick marks at each bar's cumulative value up to the CUMULATIVE_MARKER_YEARS."""
+    xs = [
+        scenario_data[ssp][f"marker_{key}"][year]
+        for ssp in sorted_ssps
+        for year in CUMULATIVE_MARKER_YEARS
+    ]
+    ys = [SSP_LABELS[ssp] for ssp in sorted_ssps for _ in CUMULATIVE_MARKER_YEARS]
+    return go.Scatter(
+        x=xs,
+        y=ys,
+        mode="markers",
+        marker=dict(symbol="line-ns", size=24, line=dict(width=2, color="black")),
+        hoverinfo="skip",
+        showlegend=False,
+    )
+
+
+def make_marker_annotations(sorted_ssps: list[str], scenario_data: dict, key: str) -> list[dict]:
+    """Year labels for the marker ticks, placed below the bottom-most bar only."""
+    bottom_ssp = sorted_ssps[0]
+    return [
+        dict(
+            x=scenario_data[bottom_ssp][f"marker_{key}"][year],
+            y=SSP_LABELS[bottom_ssp],
+            text=str(year),
+            showarrow=False,
+            yshift=-28,
+            font=dict(size=11, color="black"),
+        )
+        for year in CUMULATIVE_MARKER_YEARS
+    ]
 
 
 def make_ce_annotations(sorted_ssps: list[str], scenario_data: dict, key: str) -> list[dict]:
@@ -118,15 +161,26 @@ def make_layout(xaxis_title: str, annotations: list[dict]) -> dict:
 
 
 def plot_demand(sorted_ssps: list[str], scenario_data: dict):
-    fig = go.Figure(make_bar(sorted_ssps, scenario_data, "demand"))
-    annotations = make_ce_annotations(sorted_ssps, scenario_data, "demand")
+    fig = go.Figure(
+        [make_bar(sorted_ssps, scenario_data, "demand"), make_marker_trace(sorted_ssps, scenario_data, "demand")]
+    )
+    annotations = make_ce_annotations(sorted_ssps, scenario_data, "demand") + make_marker_annotations(
+        sorted_ssps, scenario_data, "demand"
+    )
     fig.update_layout(**make_layout("Cumulative cement demand 2024–2100 (Gt)", annotations))
     save(fig, "fig7_cumulative_demand", width=700, height=450)
 
 
 def plot_emissions(sorted_ssps: list[str], scenario_data: dict):
-    fig = go.Figure(make_bar(sorted_ssps, scenario_data, "emissions"))
-    annotations = make_ce_annotations(sorted_ssps, scenario_data, "emissions")
+    fig = go.Figure(
+        [
+            make_bar(sorted_ssps, scenario_data, "emissions"),
+            make_marker_trace(sorted_ssps, scenario_data, "emissions"),
+        ]
+    )
+    annotations = make_ce_annotations(sorted_ssps, scenario_data, "emissions") + make_marker_annotations(
+        sorted_ssps, scenario_data, "emissions"
+    )
     fig.update_layout(
         **make_layout("Cumulative process CO₂ emissions 2024–2100 (Gt CO₂)", annotations)
     )

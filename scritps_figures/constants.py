@@ -8,6 +8,10 @@ FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
+# Cumulative-value marker years for figures 7 and 8 (absolute variants only)
+CUMULATIVE_MARKER_YEARS = [2050, 2070]
+CUMULATIVE_MARKER_YEAR_HISTORICAL = 1990  # figure 8 only
+
 CEMENT_PICKLENAME = "figs_cement_SSP2_h12/model.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
