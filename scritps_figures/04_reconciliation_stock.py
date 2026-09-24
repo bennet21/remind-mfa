@@ -59,22 +59,22 @@ td, recon, bu = mfas["td"], mfas["combined"], mfas["bu"]
 
 # store information on which dimensions are subcategories of others.
 GOOD_ITEMS = {
-    "g": {"Res": ["Res"], "Com": ["Com"]},
+    "u": {"Res": ["Res"], "Com": ["Com"]},
     "e": {"Res": ["RS", "RM"], "Com": ["Com"]},
     "b": {"Res": ["RS", "RM"], "Com": ["Com"]},
 }
 
 
 def _good_letter(arr) -> str:
-    for letter in ("g", "e", "b"):
+    for letter in ("u", "e", "b"):
         if letter in arr.dims.letters:
             return letter
-    raise ValueError(f"no good dimension in {tuple(arr.dims.letters)}")
+    raise ValueError(f"no end-use dimension in {tuple(arr.dims.letters)}")
 
 
 def by_stocktype(arr, stocktype: str):
-    """Reduce a stock array to (r,) for the given stock type (Res/Com): sum the good items
-    that make up that type on whichever good dimension the array carries, then sum the
+    """Reduce a stock array to (r,) for the given stock type (Res/Com): sum the end-use items
+    that make up that type on whichever end-use dimension the array carries, then sum the
     structure dimension `s` if present."""
     letter = _good_letter(arr)
     parts = [arr[{letter: item}] for item in GOOD_ITEMS[letter][stocktype]]

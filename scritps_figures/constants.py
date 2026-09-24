@@ -1,12 +1,12 @@
 from pathlib import Path
 
-PATH_CEMENT = Path("data/cement/output/export/pickle")
+PATH_CEMENT = Path("data_out")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
 
-CEMENT_PICKLENAME = "model_cement_SSP2_h12_2026-08-04--09-27-35.pickle"
+CEMENT_PICKLENAME = "figs_cement_SSP2_h12/model.pickle"
 SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
@@ -67,6 +67,29 @@ REGION_DISPLAY_NAMES = {
     "SSA": "Sub-Saharan Africa",
     "USA": "USA",
 }
+
+AGG_REGIONS = {
+    "CAZ": "OECD",
+    "CHA": "China",
+    "EUR": "OECD",
+    "IND": "S & SE Asia",
+    "JPN": "OECD",
+    "LAM": "Rest of the World",
+    "MEA": "Rest of the World",
+    "NEU": "OECD",
+    "OAS": "S & SE Asia",
+    "REF": "Rest of the World",
+    "SSA": "Sub-Saharan Africa",
+    "USA": "OECD",
+}
+
+AGG_REGION_ORDER = [
+    "Sub-Saharan Africa",
+    "S & SE Asia",
+    "Rest of the World",
+    "China",
+    "OECD",
+]
 
 COLOR_PALETTE_1 = [
     "#6929c4",  # Purple
@@ -156,13 +179,13 @@ COLORS_REMIND = {
 COLOR_PALETTE = COLOR_PALETTE_1
 
 SSP_PICKLENAMES = {
-    "SSP1": "model_cement_SSP1_h12_2026-08-04--09-26-31.pickle",
-    "SSP2": "model_cement_SSP2_h12_2026-08-04--09-27-35.pickle",
-    "SSP3": "model_cement_SSP3_h12_2026-08-04--09-28-08.pickle",
-    "SSP4": "model_cement_SSP4_h12_2026-08-04--09-28-29.pickle",
-    "SSP5": "model_cement_SSP5_h12_2026-08-04--09-28-47.pickle",
-    "SSP1_CE": "model_cement_SSP1_CE_h12_2026-08-04--09-29-04.pickle",
-    "SSP2_CE": "model_cement_SSP2_CE_h12_2026-08-04--09-29-24.pickle",
+    "SSP1": "figs_cement_SSP1_h12/model.pickle",
+    "SSP2": "figs_cement_SSP2_h12/model.pickle",
+    "SSP3": "figs_cement_SSP3_h12/model.pickle",
+    "SSP4": "figs_cement_SSP4_h12/model.pickle",
+    "SSP5": "figs_cement_SSP5_h12/model.pickle",
+    "SSP1_CE": "figs_cement_SSP1_CE_h12/model.pickle",
+    "SSP2_CE": "figs_cement_SSP2_CE_h12/model.pickle",
 }
 SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
 SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}

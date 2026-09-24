@@ -20,6 +20,8 @@ from constants import (
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
+    AGG_REGIONS,
+    AGG_REGION_ORDER,
     STOCK_TYPE_BASE_COLORS,
     OTHER_IND_COLOR,
     OTHER_IND_NAME,
@@ -117,19 +119,40 @@ def demand(selections, region=None):
     """Combined cement demand (Mt) summed to time, for the given selection(s)."""
     if isinstance(selections, dict):
         selections = [selections]
+    region_items = [
+        source_region
+        for source_region, aggregate_region in AGG_REGIONS.items()
+        if aggregate_region == region
+    ] or [region]
     result = None
     for sel in selections:
-        filter_dict = {"k": "cement", **sel}
-        if region is not None:
-            filter_dict["r"] = region
-        arr = combined.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
-        result = arr if result is None else result + arr
+        for source_region in region_items:
+            filter_dict = {"k": "cement", **sel}
+            if source_region is not None:
+                filter_dict["r"] = source_region
+            arr = combined.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
+            result = arr if result is None else result + arr
     return result
 
 
 def td_demand(selection: dict):
     """Pre-reconciliation top-down total cement demand (Mt) summed to time."""
-    return td.stocks["in_use"].inflow[{"k": "cement", **selection}].sum_to("t") * MT_PER_T
+    region = selection.get("r")
+    region_items = [
+        source_region
+        for source_region, aggregate_region in AGG_REGIONS.items()
+        if aggregate_region == region
+    ] or [region]
+    result = None
+    for source_region in region_items:
+        filter_dict = {"k": "cement", **selection}
+        if source_region is not None:
+            filter_dict["r"] = source_region
+        else:
+            filter_dict.pop("r", None)
+        arr = td.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
+        result = arr if result is None else result + arr
+    return result
 
 
 def save(fig, output_name: str, width: int, height: int):
@@ -259,13 +282,16 @@ def plot_global(output_name: str):
     save(fig, output_name, width=1050, height=620)
 
 
-def plot_regional(output_name: str):
-    ncols = 4
-    nrows = math.ceil(len(regions) / ncols)
+def plot_regional(output_name: str, region_items, display_names, ncols: int, include_world=False):
+    plot_regions = [None, *region_items] if include_world else list(region_items)
+    nrows = math.ceil(len(plot_regions) / ncols)
     fig = make_subplots(
         rows=nrows,
         cols=ncols,
-        subplot_titles=[REGION_DISPLAY_NAMES.get(str(r), str(r)) for r in regions],
+        subplot_titles=[
+            "World" if region is None else display_names.get(str(region), str(region))
+            for region in plot_regions
+        ],
         vertical_spacing=0.12,
         horizontal_spacing=0.06,
     )
@@ -290,7 +316,7 @@ def plot_regional(output_name: str):
         )
     )
 
-    for index, region in enumerate(regions):
+    for index, region in enumerate(plot_regions):
         row = index // ncols + 1
         col = index % ncols + 1
 
@@ -319,6 +345,21 @@ def plot_regional(output_name: str):
             col=col,
         )
         fig.update_yaxes(showgrid=True, row=row, col=col)
+
+    if include_world:
+        fig.add_shape(
+            type="rect",
+            x0=0,
+            x1=1,
+            y0=0,
+            y1=1,
+            xref="x domain",
+            yref="y domain",
+            line={"color": "black", "width": 2},
+            fillcolor="rgba(0,0,0,0)",
+            row=1,
+            col=1,
+        )
 
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13}
@@ -362,6 +403,7 @@ def plot_regional(output_name: str):
 
 
 plot_global("fig2_demand_by_function_global")
-plot_regional("fig2_demand_by_function_regional")
+plot_regional("fig2_demand_by_function_h1", regions, REGION_DISPLAY_NAMES, ncols=4)
+plot_regional("fig2_demand_by_function_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
 
 print("END")

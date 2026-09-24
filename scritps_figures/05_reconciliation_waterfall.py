@@ -59,8 +59,7 @@ PATTERN_KWARGS = {"fgcolor": "white", "size": 7, "solidity": 0.4}
 # Analysis layer (ported from the old parameter-reconciliation-paper waterfall script)
 # =================================================================================================
 class ReducingDict:
-    """Lazy wrapper that reduces the good dimension `g` (Res/Com/Ind/Civ) to the reconciliation's
-    common good `u` (Res/Com) on key access, forwarding __getitem__ to the underlying dict.
+    """Lazy wrapper that reduces end uses to the reconciliation's common dimension on key access.
 
     This mirrors the good-dimension reduction in `CementParameterReconciliation.reduce_prm`, but
     NOT its floorspace time-slice: `AnalyzeParameterReconciliation.__init__` already slices
@@ -77,8 +76,8 @@ class ReducingDict:
 
     def __getitem__(self, key):
         val = self._prms[key]  # triggers DependencyTracker.__getitem__ when spying
-        if "g" in val.dims.letters:
-            val = val[{"g": self._pr.reduced_good}]
+        if "u" in val.dims.letters:
+            val = self._pr.reduce_u_to_common(val)
         return val
 
     def __iter__(self):
@@ -116,7 +115,7 @@ def make_fns(pr, population, region, stock_type):
         if region is not None:
             sel["r"] = region
         if stock_type is not None:
-            sel["u"] = stock_type
+            sel["c"] = stock_type
         if sel:
             arr = arr[sel]
         return arr.sum_to(fd.DimensionSet(dim_list=[]))
