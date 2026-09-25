@@ -4,3 +4,4 @@ lifetime_mean,"steel,plastics",1.2,,,
 lifetime_std,"steel,plastics",1.2,,,
 concrete_building_mi_target_factor,cement,0.5,,,
 lifetime_min_factor,cement,1.2,,,
+min_timber_share,cement,0.1,,,Wooden buildings reach at least 10% of floor area

@@ -298,6 +298,11 @@ scenario_parameters = [
         split_dimension_letter="s",
         split_balancing_item="C",
     ),
+    RemindMFAParameterDefinition(
+        name="min_timber_share",
+        dim_letters=("r",),
+        description="Minimum share of timber buildings the structure split converges to.",
+    ),
     ExtrapolationDefinition(
         name="concrete_building_mi",
         dim_letters=("r", "b", "s"),
