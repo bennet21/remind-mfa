@@ -66,6 +66,29 @@ class CementModel(CommonModel):
         )
         return weight
 
+    def calculate_weighted_mean(
+        self,
+        regional_parameter: fd.Parameter,
+        global_weights: fd.FlodymArray,
+        output_name: str,
+    ) -> fd.Parameter:
+        """Calculate a global weighted mean, then blend it with regional values.
+
+        The development weight controls the blend: a weight of one selects the
+        global weighted mean, while a weight of zero preserves the regional value.
+        """
+        global_weighted_mean = (regional_parameter * global_weights).sum_over(
+            "r"
+        ) / global_weights.sum_over("r")
+        development_blended_mean = fd.Parameter(
+            dims=regional_parameter.dims, name=output_name
+        )
+        development_blended_mean[...] = (
+            self.parameters["development_weight"] * global_weighted_mean
+            + (1.0 - self.parameters["development_weight"]) * regional_parameter
+        )
+        return development_blended_mean
+
     def calculate_derived_parameters(self):
 
         # copy/rename for use in common model
@@ -73,30 +96,19 @@ class CementModel(CommonModel):
 
         # derive mean dwelling and structure splits from global weighted average
         prm = self.parameters
-        w = prm["development_weight"]
         floorspace = prm["floorspace"][{"t": self.dims["h"].items[-1]}]
 
         # dwelling split target
         res_floorspace = floorspace[{"c": "Res"}]
-        global_dwelling_split = (prm["dwelling_split"] * res_floorspace).sum_over(
-            "r"
-        ) / res_floorspace.sum_over("r")
-        dwelling_split_mean = fd.Parameter(
-            dims=prm["dwelling_split"].dims, name="dwelling_split_mean"
+        prm["dwelling_split_mean"] = self.calculate_weighted_mean(
+            prm["dwelling_split"], res_floorspace, "dwelling_split_mean"
         )
-        dwelling_split_mean[...] = w * global_dwelling_split + (1.0 - w) * prm["dwelling_split"]
-        prm["dwelling_split_mean"] = dwelling_split_mean
 
         # structure split target
         bu_floorspace = expand_common_to_bu(floorspace, prm)
-        global_structure_split = (prm["structure_split"] * bu_floorspace).sum_over(
-            "r"
-        ) / bu_floorspace.sum_over("r")
-        structure_split_mean = fd.Parameter(
-            dims=prm["structure_split"].dims, name="structure_split_mean"
+        prm["structure_split_mean"] = self.calculate_weighted_mean(
+            prm["structure_split"], bu_floorspace, "structure_split_mean"
         )
-        structure_split_mean[...] = w * global_structure_split + (1.0 - w) * prm["structure_split"]
-        prm["structure_split_mean"] = structure_split_mean
 
     def run(self):
         super().run()
