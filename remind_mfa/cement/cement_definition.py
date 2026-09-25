@@ -298,6 +298,14 @@ scenario_parameters = [
         split_dimension_letter="s",
         split_balancing_item="C",
     ),
+    ExtrapolationDefinition(
+        name="concrete_building_mi",
+        dim_letters=("r", "b", "s"),
+    ),
+    PlainDataPointDefinition(
+        name="concrete_building_mi_target_factor",
+        description="Factor by which the MI 25 percentile should be reached.",
+    ),
 ]
 
 # fmt: on

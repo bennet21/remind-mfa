@@ -110,6 +110,15 @@ class CementModel(CommonModel):
             prm["structure_split"], bu_floorspace, "structure_split_mean"
         )
 
+        # MI
+        # TODO add p25 as lower_mi in mrmfa
+        lower_mi = prm["concrete_building_mi"] * 0.8
+        prm["concrete_building_mi_target"] = (
+            prm["concrete_building_mi"]
+            + self.scenario_parameters["concrete_building_mi_target_factor"]
+            * (lower_mi - prm["concrete_building_mi"])
+        ).to_class(fd.Parameter)
+
     def run(self):
         super().run()
 
