@@ -110,7 +110,7 @@ class CementModel(CommonModel):
             prm["structure_split"], bu_floorspace, "structure_split_mean"
         )
 
-        # MI
+        # MI: close the gap between p50 and p25 MI by a factor
         # TODO add p25 as lower_mi in mrmfa
         lower_mi = prm["concrete_building_mi"] * 0.8
         prm["concrete_building_mi_target"] = (
@@ -118,6 +118,20 @@ class CementModel(CommonModel):
             + self.scenario_parameters["concrete_building_mi_target_factor"]
             * (lower_mi - prm["concrete_building_mi"])
         ).to_class(fd.Parameter)
+
+        # Lifetime
+        # TODO move lifetime_max to mrmfa
+        lifetime_max = fd.FlodymArray(dims=self.dims["u",])
+        lifetime_max["Res"] = 100
+        lifetime_max["Com"] = 80
+        lifetime_max["Ind"] = 75
+        lifetime_max["Civ"] = 75
+        lifetime_current = self.parameters["lifetime_mean"][{"h": self.dims["h"].items[-1]}]
+        multiplier = (1 / lifetime_current * lifetime_max - 1).maximum(0)
+
+        alpha = self.scenario_parameters["lifetime_min_factor"]
+        prm["lifetime_mean_factor"] = (alpha + (alpha - 1) * multiplier).to_class(fd.Parameter)
+        prm["lifetime_std_factor"] = prm["lifetime_mean_factor"]
 
     def run(self):
         super().run()

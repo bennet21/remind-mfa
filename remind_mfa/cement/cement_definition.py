@@ -306,6 +306,10 @@ scenario_parameters = [
         name="concrete_building_mi_target_factor",
         description="Factor by which the MI 25 percentile should be reached.",
     ),
+    PlainDataPointDefinition(
+        name="lifetime_min_factor",
+        description="Minimum factor by which the lifetime mean should be adjusted.",
+    ),
 ]
 
 # fmt: on
