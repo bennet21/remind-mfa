@@ -278,7 +278,6 @@ def plot_combined(output_name: str, region_items, display_names, ncols_regional:
 plot_global("fig3_production_by_ssp_global")
 plot_regional("fig3_production_by_ssp_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
 plot_regional("fig3_production_by_ssp_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
-plot_combined("fig3_production_by_ssp_combined_h12", regions, REGION_DISPLAY_NAMES, ncols_regional=4)
-plot_combined("fig3_production_by_ssp_combined_agg", AGG_REGION_ORDER, {}, ncols_regional=3)
+plot_combined("fig3_production_by_ssp_h12_global", regions, REGION_DISPLAY_NAMES, ncols_regional=4)
 
 print("END")
