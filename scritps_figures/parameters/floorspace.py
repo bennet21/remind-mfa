@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -38,20 +39,28 @@ OUTPUT_DIR = FIGURES_DIR / "parameters"
 combined_by_ssp = {
     ssp: load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])["combined"] for ssp in SSPS
 }
-time = combined_by_ssp[SSPS[0]].stocks["floorspace"].stock.dims["t"].items
 regions = combined_by_ssp[SSPS[0]].stocks["floorspace"].stock.dims["r"].items
+
+_full_time = combined_by_ssp[SSPS[0]].stocks["floorspace"].stock.dims["t"].items
+
+# Floorspace is zeroed out for a leading run of years (see
+# cement_mfa_system_bottom_up.compute_floorspace_stock); skip that run rather than hardcode a year.
+_raw_floorspace = combined_by_ssp[SSPS[0]].stocks["floorspace"].stock.sum_to("t").values
+_display_start_index = int(np.flatnonzero(_raw_floorspace)[0])
+FIRST_DISPLAY_YEAR = _full_time[_display_start_index]
+time = _full_time[_display_start_index:]
 
 
 def floorspace(combined, region, end_use):
-    """Floorspace per capita; global (region=None) sums floorspace and population across
-    regions before dividing."""
+    """Floorspace per capita from FIRST_DISPLAY_YEAR onward; global (region=None) sums
+    floorspace and population across regions before dividing."""
     if region is not None:
         fs = combined.stocks["floorspace"].stock[{"r": region, "c": end_use}]
         population = combined.parameters["population"][{"r": region}]
     else:
         fs = combined.stocks["floorspace"].stock[{"c": end_use}].sum_to("t")
         population = combined.parameters["population"].sum_to("t")
-    return (fs / population).values
+    return (fs / population).values[_display_start_index:]
 
 
 # Shared y-range per end use, spanning all regions, the global aggregate, and all scenarios, so
