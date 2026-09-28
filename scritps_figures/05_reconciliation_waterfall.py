@@ -34,7 +34,7 @@ from constants import (
     CONCRETE_MASK,
     REGION_DISPLAY_NAMES,
 )
-from helpers import load_model
+from helpers import load_model, cache_is_valid
 
 from remind_mfa.cement.cement_parameter_reconciliation import (
     CementParameterReconciliation,
@@ -138,7 +138,7 @@ def make_fns(pr, population, region, stock_type):
 def load_or_compute_impacts(analyzer, td_fn, bu_fn, cache_key: str):
     bu_cache = CACHE_DIR_CEMENT / f"bu_impact_{cache_key}.pkl"
     td_cache = CACHE_DIR_CEMENT / f"td_impact_{cache_key}.pkl"
-    if bu_cache.exists() and td_cache.exists():
+    if cache_is_valid(SOURCE_PICKLE, {"bu": bu_cache, "td": td_cache}):
         with bu_cache.open("rb") as f:
             bu_impact = pickle.load(f)
         with td_cache.open("rb") as f:
