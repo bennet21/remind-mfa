@@ -177,7 +177,7 @@ def make_ce_annotations(
                 yref=yref,
                 axref=xref,
                 ayref=yref,
-                yshift=-11,
+                yshift=-13,
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
@@ -198,7 +198,7 @@ def make_ce_annotations(
                 y=r,
                 xref=xref,
                 yref=yref,
-                yshift=-20,
+                yshift=-22,
                 text=(
                     f"{regional_data[r]['hist'] + regional_data[r]['future'] - ce_data[r]['hist'] - ce_data[r]['future']:.1f} {unit}"
                 ),
