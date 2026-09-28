@@ -28,7 +28,7 @@ from constants import (
     SSP_LABELS,
     SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas
+from helpers import load_mfas, shared_range
 
 YLABEL = "Hibernating stock share"
 SSPS = list(SSP_SOURCE_PICKLES.keys())
@@ -127,6 +127,9 @@ def plot_combined(output_name: str):
 
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 12}
+
+    fig.update_xaxes(range=[time[0], time[-1]])
+    fig.update_yaxes(range=shared_range(*(trace.y for trace in fig.data)))
 
     fig.update_layout(
         template="plotly_white",

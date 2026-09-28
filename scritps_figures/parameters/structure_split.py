@@ -31,7 +31,7 @@ from constants import (
     SSP_SOURCE_PICKLES,
     STRUCTURE_DISPLAY_NAMES,
 )
-from helpers import load_mfas
+from helpers import load_mfas, shared_range
 from remind_mfa.cement.cement_mfa_system_bottom_up import expand_common_to_bu
 
 YLABEL = "Structure split"
@@ -136,6 +136,9 @@ def plot_combined(structure: str, end_use: str, output_name: str):
 
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 12}
+
+    fig.update_xaxes(range=[time[0], time[-1]])
+    fig.update_yaxes(range=shared_range(*(trace.y for trace in fig.data)))
 
     title = f"{STRUCTURE_DISPLAY_NAMES[structure]} — {FUNCTION_DISPLAY_NAMES[end_use]}"
 

@@ -122,6 +122,19 @@ def process_emissions(demand, parameters) -> object:
     return clinker * cao_per_clinker * parameters["cao_emission_factor"]
 
 
+def shared_range(*value_arrays: np.ndarray, pad_frac: float = 0.05) -> list[float]:
+    """Common axis range spanning all given value arrays, with a small padding fraction.
+
+    Used to give every panel of a multi-panel figure (or every figure in a per-region series)
+    the same axis range, so panels are visually comparable. NaNs (e.g. from weighted averages
+    dividing by a zero pre-historic baseline) are ignored.
+    """
+    all_values = np.concatenate([np.asarray(values, dtype=float).ravel() for values in value_arrays])
+    lo, hi = np.nanmin(all_values), np.nanmax(all_values)
+    pad = pad_frac * (hi - lo)
+    return [lo - pad, hi + pad]
+
+
 def aggregate_by_region(values: np.ndarray, region_items: np.ndarray) -> dict[str, np.ndarray]:
     """Sum a (t, r) array's source regions into the aggregated regions of `AGG_REGIONS`.
 

@@ -1,7 +1,8 @@
 """Parameter figure: cement floorspace per capita under SSP1-5 plus the two circular-economy
 (CE) variants.
 
-One figure per h12 region, each with two subplots (Residential, Commercial), comparing the
+One figure per h12 region, plus a global figure (floorspace and population summed across
+regions before dividing), each with two subplots (Residential, Commercial), comparing the
 floorspace-per-capita time series across the 7 scenarios. A vertical dashed line marks the last
 historical year (2023).
 
@@ -27,7 +28,7 @@ from constants import (
     SSP_LABELS,
     SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas
+from helpers import load_mfas, shared_range
 
 YLABEL = "Floorspace per capita (m²/cap)"
 END_USES = [("Res", "Residential"), ("Com", "Commercial")]
@@ -42,9 +43,26 @@ regions = combined_by_ssp[SSPS[0]].stocks["floorspace"].stock.dims["r"].items
 
 
 def floorspace(combined, region, end_use):
-    fs = combined.stocks["floorspace"].stock[{"r": region, "c": end_use}].values
-    population = combined.parameters["population"][{"r": region}].values
-    return fs / population
+    """Floorspace per capita; global (region=None) sums floorspace and population across
+    regions before dividing."""
+    if region is not None:
+        fs = combined.stocks["floorspace"].stock[{"r": region, "c": end_use}]
+        population = combined.parameters["population"][{"r": region}]
+    else:
+        fs = combined.stocks["floorspace"].stock[{"c": end_use}].sum_to("t")
+        population = combined.parameters["population"].sum_to("t")
+    return (fs / population).values
+
+
+# Shared y-range per end use, spanning all regions, the global aggregate, and all scenarios, so
+# every figure is visually comparable.
+Y_RANGES = {
+    end_use: shared_range(
+        *(floorspace(combined_by_ssp[ssp], region, end_use) for ssp in SSPS for region in regions),
+        *(floorspace(combined_by_ssp[ssp], None, end_use) for ssp in SSPS),
+    )
+    for end_use, _ in END_USES
+}
 
 
 def save(fig, output_name: str, width: int, height: int):
@@ -54,7 +72,7 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot_region(region: str):
+def plot_region(region, title: str, output_name: str):
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -86,21 +104,32 @@ def plot_region(region: str):
             row=1,
             col=col,
         )
-        fig.update_yaxes(title_text=YLABEL if col == 1 else None, showgrid=True, row=1, col=col)
+        fig.update_yaxes(
+            title_text=YLABEL if col == 1 else None,
+            showgrid=True,
+            range=Y_RANGES[end_use],
+            row=1,
+            col=col,
+        )
         fig.update_xaxes(title_text="Year", row=1, col=col)
 
+    fig.update_xaxes(range=[time[0], time[-1]])
+
     fig.update_layout(
-        title=REGION_DISPLAY_NAMES.get(region, region),
+        title=title,
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         legend={"font": {"size": 11}},
         margin={"l": 90, "r": 30, "t": 80},
     )
-    save(fig, f"floorspace_{region}", width=1100, height=500)
+    save(fig, output_name, width=1100, height=500)
 
 
 for region in regions:
-    plot_region(str(region))
+    region = str(region)
+    plot_region(region, REGION_DISPLAY_NAMES.get(region, region), f"floorspace_{region}")
+
+plot_region(None, "Global", "floorspace_Global")
 
 print("END")
