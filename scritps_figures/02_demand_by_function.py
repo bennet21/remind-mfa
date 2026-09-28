@@ -3,7 +3,8 @@
 Stacked areas show cement demand split into residential (single-family / multi-family shaded),
 commercial concrete, and a three-band "Other" (industrial, civil, res./com. mortar). On top, a
 black line shows the pre-reconciliation top-down total cement demand. Produces a global figure and
-a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`.
+a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`, once per scenario in
+`SCENARIOS` (output filenames are suffixed with the scenario name).
 
 Run from the repository root:
     uv run python scritps_figures/02_demand_by_function.py
@@ -15,8 +16,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from constants import (
-    SOURCE_PICKLE,
-    CACHE_DIR_CEMENT,
+    SSP_SOURCE_PICKLES,
+    SSP_CACHE_DIRS,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
@@ -42,71 +43,81 @@ MIN_FRACTION_GLOBAL = 0.04
 MIN_FRACTION_REGIONAL = 0.10
 STRUCTURE_SHADE_SPREAD = 0.10
 
-mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
-combined = mfas["combined"]
-td = mfas["td"]
+# Which scenarios to plot: "all", or a list of keys from constants.SSP_SOURCE_PICKLES,
+# e.g. ["SSP2"].
+SCENARIOS = "all"
 
-time = combined.stocks["in_use"].stock.dims["t"].items
-regions = combined.stocks["in_use"].inflow.dims["r"].items
-_all_structures = combined.stocks["in_use"].inflow.dims["s"].items
-_buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
+_ALL_SCENARIOS = list(SSP_SOURCE_PICKLES.keys())
+
+
+def selected_scenarios() -> list[str]:
+    if SCENARIOS == "all":
+        return _ALL_SCENARIOS
+    missing = set(SCENARIOS) - set(_ALL_SCENARIOS)
+    if missing:
+        raise ValueError(f"Unknown scenario(s): {sorted(missing)}")
+    return list(SCENARIOS)
+
 
 RES_COLOR = STOCK_TYPE_BASE_COLORS["Res"]
 COM_COLOR = STOCK_TYPE_BASE_COLORS["Com"]
 
 _res_shade_levels = shade_levels(2)
 
-SERIES = [
-    {
-        "selections": [{"e": "RS", "m": "concrete"}],
-        "color": shade(RES_COLOR, _res_shade_levels[0]),
-        "name": "Single-family res. buildings",
-        "group": "res",
-        "grouptitle": "Residential",
-        "base_hex": RES_COLOR,
-        "shade_center": _res_shade_levels[0],
-    },
-    {
-        "selections": [{"e": "RM", "m": "concrete"}],
-        "color": shade(RES_COLOR, _res_shade_levels[1]),
-        "name": "Multi-family res. buildings",
-        "group": "res",
-        "grouptitle": None,
-        "base_hex": RES_COLOR,
-        "shade_center": _res_shade_levels[1],
-    },
-    {
-        "selections": [{"e": "Com", "m": "concrete"}],
-        "color": COM_COLOR,
-        "name": "Commercial",
-        "group": "com",
-        "grouptitle": None,
-        "base_hex": COM_COLOR,
-        "shade_center": 0.0,
-    },
-    {
-        "selections": [{"e": "Ind"}],
-        "color": OTHER_IND_COLOR,
-        "name": OTHER_IND_NAME,
-        "group": "other",
-        "grouptitle": "Other cement use",
-    },
-    {
-        "selections": [{"e": "Civ"}],
-        "color": OTHER_CIV_COLOR,
-        "name": OTHER_CIV_NAME,
-        "group": "other",
-        "grouptitle": None,
-    },
-    {
-        "selections": [{"m": "mortar", "e": "RS"}, {"m": "mortar", "e": "RM"},
-                       {"m": "mortar", "e": "Com"}],
-        "color": OTHER_RES_COM_MORTAR_COLOR,
-        "name": OTHER_RES_COM_MORTAR_NAME,
-        "group": "other",
-        "grouptitle": None,
-    },
-]
+
+def build_series() -> list[dict]:
+    return [
+        {
+            "selections": [{"e": "RS", "m": "concrete"}],
+            "color": shade(RES_COLOR, _res_shade_levels[0]),
+            "name": "Single-family res. buildings",
+            "group": "res",
+            "grouptitle": "Residential",
+            "base_hex": RES_COLOR,
+            "shade_center": _res_shade_levels[0],
+        },
+        {
+            "selections": [{"e": "RM", "m": "concrete"}],
+            "color": shade(RES_COLOR, _res_shade_levels[1]),
+            "name": "Multi-family res. buildings",
+            "group": "res",
+            "grouptitle": None,
+            "base_hex": RES_COLOR,
+            "shade_center": _res_shade_levels[1],
+        },
+        {
+            "selections": [{"e": "Com", "m": "concrete"}],
+            "color": COM_COLOR,
+            "name": "Commercial",
+            "group": "com",
+            "grouptitle": None,
+            "base_hex": COM_COLOR,
+            "shade_center": 0.0,
+        },
+        {
+            "selections": [{"e": "Ind"}],
+            "color": OTHER_IND_COLOR,
+            "name": OTHER_IND_NAME,
+            "group": "other",
+            "grouptitle": "Other cement use",
+        },
+        {
+            "selections": [{"e": "Civ"}],
+            "color": OTHER_CIV_COLOR,
+            "name": OTHER_CIV_NAME,
+            "group": "other",
+            "grouptitle": None,
+        },
+        {
+            "selections": [{"m": "mortar", "e": "RS"}, {"m": "mortar", "e": "RM"},
+                           {"m": "mortar", "e": "Com"}],
+            "color": OTHER_RES_COM_MORTAR_COLOR,
+            "name": OTHER_RES_COM_MORTAR_NAME,
+            "group": "other",
+            "grouptitle": None,
+        },
+    ]
+
 
 _INLINE_LABELS = {
     "Single-family res. buildings": "Single-family<br>res. buildings",
@@ -115,7 +126,7 @@ _INLINE_LABELS = {
 }
 
 
-def demand(selections, region=None):
+def demand(combined, selections, region=None):
     """Combined cement demand (Mt) summed to time, for the given selection(s)."""
     if isinstance(selections, dict):
         selections = [selections]
@@ -135,7 +146,7 @@ def demand(selections, region=None):
     return result
 
 
-def td_demand(selection: dict):
+def td_demand(td, selection: dict):
     """Pre-reconciliation top-down total cement demand (Mt) summed to time."""
     region = selection.get("r")
     region_items = [
@@ -177,23 +188,24 @@ def _structure_shade_levels(center: float, n: int) -> list:
     return [center - STRUCTURE_SHADE_SPREAD + 2 * STRUCTURE_SHADE_SPREAD * i / (n - 1) for i in range(n)]
 
 
-def _band_midpoints(region=None) -> list:
+def _band_midpoints(combined, series, buildings, time, region=None) -> list:
     time_list = list(time)
     t_idx = min(range(len(time_list)), key=lambda i: abs(time_list[i] - LABEL_YEAR))
-    vals = [float(demand(s["selections"], region=region).values[t_idx]) for s in SERIES]
+    vals = [float(demand(combined, s["selections"], region=region).values[t_idx]) for s in series]
     total = sum(vals)
     result, cumulative = [], 0.0
-    for s, v in zip(SERIES, vals):
+    for s, v in zip(series, vals):
         result.append({"series": s, "val": v, "total": total, "y_mid": cumulative + v / 2})
         cumulative += v
     return result
 
 
 def _label_annotations(
-    region=None, xref="x", yref="y", font_size=11, min_fraction=MIN_FRACTION_GLOBAL
+    combined, series, buildings, time, region=None, xref="x", yref="y", font_size=11,
+    min_fraction=MIN_FRACTION_GLOBAL,
 ) -> list:
     out = []
-    for info in _band_midpoints(region=region):
+    for info in _band_midpoints(combined, series, buildings, time, region=region):
         if info["total"] > 0 and info["val"] / info["total"] >= min_fraction:
             name = info["series"]["name"]
             out.append(dict(
@@ -207,20 +219,20 @@ def _label_annotations(
     return out
 
 
-def _add_series_traces(fig, stackgroup, region=None, row=None, col=None):
-    """Add SERIES traces; building categories expand into per-structure sub-bands."""
+def _add_series_traces(fig, combined, series, buildings, time, stackgroup, region=None, row=None, col=None):
+    """Add series traces; building categories expand into per-structure sub-bands."""
     add_kwargs = {"row": row, "col": col} if row is not None else {}
 
-    for s in SERIES:
+    for s in series:
         if "base_hex" in s:
-            shade_ts = _structure_shade_levels(s["shade_center"], n=len(_buildings))
-            for b, shade_t in zip(_buildings, shade_ts):
+            shade_ts = _structure_shade_levels(s["shade_center"], n=len(buildings))
+            for b, shade_t in zip(buildings, shade_ts):
                 sub_sel = [{**sel, "s": b} for sel in s["selections"]]
                 sub_color = shade(s["base_hex"], shade_t)
                 fig.add_trace(
                     go.Scatter(
                         x=time,
-                        y=demand(sub_sel, region=region).values,
+                        y=demand(combined, sub_sel, region=region).values,
                         mode="lines",
                         stackgroup=stackgroup,
                         line={"color": sub_color, "width": 0.3},
@@ -233,7 +245,7 @@ def _add_series_traces(fig, stackgroup, region=None, row=None, col=None):
             fig.add_trace(
                 go.Scatter(
                     x=time,
-                    y=demand(s["selections"], region=region).values,
+                    y=demand(combined, s["selections"], region=region).values,
                     mode="lines",
                     stackgroup=stackgroup,
                     line={"color": s["color"], "width": 0.3},
@@ -244,15 +256,15 @@ def _add_series_traces(fig, stackgroup, region=None, row=None, col=None):
             )
 
 
-def plot_global(output_name: str):
+def plot_global(combined, td, time, series, buildings, output_name: str):
     fig = go.Figure()
 
-    _add_series_traces(fig, stackgroup="func")
+    _add_series_traces(fig, combined, series, buildings, time, stackgroup="func")
 
     fig.add_trace(
         go.Scatter(
             x=time,
-            y=td_demand({}).values,
+            y=td_demand(td, {}).values,
             mode="lines",
             line={"color": TD_LINE_COLOR, "width": 2},
             name=TD_LINE_NAME,
@@ -274,7 +286,7 @@ def plot_global(output_name: str):
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin={"l": 90, "r": 30},
-        annotations=_label_annotations(),
+        annotations=_label_annotations(combined, series, buildings, time),
     )
     fig.update_xaxes(title_font_size=15)
     fig.update_yaxes(title_font_size=15)
@@ -282,7 +294,10 @@ def plot_global(output_name: str):
     save(fig, output_name, width=1050, height=620)
 
 
-def plot_regional(output_name: str, region_items, display_names, ncols: int, include_world=False):
+def plot_regional(
+    combined, td, time, series, buildings, output_name: str, region_items, display_names,
+    ncols: int, include_world=False,
+):
     plot_regions = [None, *region_items] if include_world else list(region_items)
     nrows = math.ceil(len(plot_regions) / ncols)
     fig = make_subplots(
@@ -296,7 +311,7 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
         horizontal_spacing=0.06,
     )
 
-    for s in SERIES:
+    for s in series:
         fig.add_trace(
             go.Scatter(
                 x=[None], y=[None],
@@ -320,12 +335,15 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
         row = index // ncols + 1
         col = index % ncols + 1
 
-        _add_series_traces(fig, stackgroup=f"func{index}", region=region, row=row, col=col)
+        _add_series_traces(
+            fig, combined, series, buildings, time, stackgroup=f"func{index}", region=region,
+            row=row, col=col,
+        )
 
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=td_demand({"r": region}).values,
+                y=td_demand(td, {"r": region}).values,
                 mode="lines",
                 line={"color": TD_LINE_COLOR, "width": 1.5},
                 name=TD_LINE_NAME,
@@ -402,8 +420,31 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
     save(fig, output_name, width=1700, height=900)
 
 
-plot_global("fig2_demand_by_function_global")
-plot_regional("fig2_demand_by_function_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
-plot_regional("fig2_demand_by_function_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
+def run(ssp: str):
+    print(f"--- Scenario {ssp} ---")
+    mfas = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])
+    combined = mfas["combined"]
+    td = mfas["td"]
+
+    time = combined.stocks["in_use"].stock.dims["t"].items
+    regions = combined.stocks["in_use"].inflow.dims["r"].items
+    all_structures = combined.stocks["in_use"].inflow.dims["s"].items
+    buildings = [b for b in all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
+
+    series = build_series()
+
+    plot_global(combined, td, time, series, buildings, f"fig2_demand_by_function_global_{ssp}")
+    plot_regional(
+        combined, td, time, series, buildings, f"fig2_demand_by_function_h12_{ssp}",
+        regions, REGION_DISPLAY_NAMES, ncols=4,
+    )
+    plot_regional(
+        combined, td, time, series, buildings, f"fig2_demand_by_function_agg_{ssp}",
+        AGG_REGION_ORDER, {}, ncols=3, include_world=True,
+    )
+
+
+for _ssp in selected_scenarios():
+    run(_ssp)
 
 print("END")

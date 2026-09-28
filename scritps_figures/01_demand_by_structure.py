@@ -5,7 +5,8 @@ dimension (`s`: Concrete / Masonry / Timber / Steel), with each structure furthe
 the end-use dimension (`e`: single-family res. / multi-family res. / commercial) via
 shading. A separate grey "Other" band holds non-building (industrial + civil) cement. On top, a
 black line shows the pre-reconciliation top-down total cement demand. Produces a global figure and
-a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`.
+a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`, once per scenario in
+`SCENARIOS` (output filenames are suffixed with the scenario name).
 
 Run from the repository root:
     uv run python scritps_figures/01_demand_by_structure.py
@@ -17,8 +18,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from constants import (
-    SOURCE_PICKLE,
-    CACHE_DIR_CEMENT,
+    SSP_SOURCE_PICKLES,
+    SSP_CACHE_DIRS,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
@@ -43,30 +44,33 @@ TD_LINE_COLOR = "#222222"
 TD_LINE_NAME = "Top-down demand (pre-reconciliation)"
 YLABEL = "Cement demand (Mt)"
 
-mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
-combined = mfas["combined"]
-td = mfas["td"]
+# Which scenarios to plot: "all", or a list of keys from constants.SSP_SOURCE_PICKLES,
+# e.g. ["SSP2"].
+SCENARIOS = "all"
 
-time = combined.stocks["in_use"].stock.dims["t"].items
-regions = combined.stocks["in_use"].inflow.dims["r"].items
-_all_structures = combined.stocks["in_use"].inflow.dims["s"].items
-_all_functions = combined.stocks["in_use"].inflow.dims["e"].items
-
-_buildings = [b for b in _all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
-_functions = [f for f in _all_functions if str(f) in FUNCTION_DISPLAY_NAMES]
+_ALL_SCENARIOS = list(SSP_SOURCE_PICKLES.keys())
 
 
-def build_series() -> list[dict]:
+def selected_scenarios() -> list[str]:
+    if SCENARIOS == "all":
+        return _ALL_SCENARIOS
+    missing = set(SCENARIOS) - set(_ALL_SCENARIOS)
+    if missing:
+        raise ValueError(f"Unknown scenario(s): {sorted(missing)}")
+    return list(SCENARIOS)
+
+
+def build_series(buildings, functions) -> list[dict]:
     """Ordered stack series (bottom -> top): structure x function, then non-building 'Other' on top."""
     series = []
 
-    levels = shade_levels(len(_functions))
+    levels = shade_levels(len(functions))
     structure_legend_ranks = {"S": 10, "T": 20, "M": 30, "C": 40}
-    for b in _buildings:
+    for b in buildings:
         base = STRUCTURE_BASE_COLORS.get(str(b), COLOR_PALETTE[0])
         structure_name = STRUCTURE_DISPLAY_NAMES.get(str(b), str(b))
         struct_rank = structure_legend_ranks.get(str(b), 100)
-        for f, t in zip(_functions, levels):
+        for f, t in zip(functions, levels):
             series.append(
                 {
                     "selections": [{"s": b, "e": f}],
@@ -94,10 +98,7 @@ def build_series() -> list[dict]:
     return series
 
 
-SERIES = build_series()
-
-
-def demand(selections, region=None):
+def demand(combined, selections, region=None):
     """Combined cement demand (Mt) summed to time, for the given selection(s)."""
     if isinstance(selections, dict):
         selections = [selections]
@@ -117,7 +118,7 @@ def demand(selections, region=None):
     return result
 
 
-def td_demand(selection: dict):
+def td_demand(td, selection: dict):
     """Pre-reconciliation top-down total cement demand (Mt) summed to time."""
     region = selection.get("r")
     region_items = [
@@ -144,14 +145,14 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot_global(output_name: str):
+def plot_global(combined, td, time, series, output_name: str):
     fig = go.Figure()
 
-    for s in SERIES:
+    for s in series:
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=demand(s["selections"]).values,
+                y=demand(combined, s["selections"]).values,
                 mode="lines",
                 stackgroup="struct",
                 line={"color": s["color"], "width": 0.3},
@@ -169,7 +170,7 @@ def plot_global(output_name: str):
     fig.add_trace(
         go.Scatter(
             x=time,
-            y=td_demand({}).values,
+            y=td_demand(td, {}).values,
             mode="lines",
             line={"color": TD_LINE_COLOR, "width": 2},
             name=TD_LINE_NAME,
@@ -200,7 +201,10 @@ def plot_global(output_name: str):
     save(fig, output_name, width=1050, height=620)
 
 
-def plot_regional(output_name: str, region_items, display_names, ncols: int, include_world=False):
+def plot_regional(
+    combined, td, time, series, output_name: str, region_items, display_names, ncols: int,
+    include_world=False,
+):
     plot_regions = [None, *region_items] if include_world else list(region_items)
     nrows = math.ceil(len(plot_regions) / ncols)
     fig = make_subplots(
@@ -218,11 +222,11 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
         row = index // ncols + 1
         col = index % ncols + 1
 
-        for s in SERIES:
+        for s in series:
             fig.add_trace(
                 go.Scatter(
                     x=time,
-                    y=demand(s["selections"], region=region).values,
+                    y=demand(combined, s["selections"], region=region).values,
                     mode="lines",
                     stackgroup=f"struct{index}",  # isolate stacking per panel
                     line={"color": s["color"], "width": 0.3},
@@ -241,7 +245,7 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=td_demand({"r": region}).values,
+                y=td_demand(td, {"r": region}).values,
                 mode="lines",
                 line={"color": TD_LINE_COLOR, "width": 1.5},
                 name=TD_LINE_NAME,
@@ -320,8 +324,34 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
     save(fig, output_name, width=1700, height=800)
 
 
-plot_global("fig1_demand_by_structure_global")
-plot_regional("fig1_demand_by_structure_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
-plot_regional("fig1_demand_by_structure_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
+def run(ssp: str):
+    print(f"--- Scenario {ssp} ---")
+    mfas = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])
+    combined = mfas["combined"]
+    td = mfas["td"]
+
+    time = combined.stocks["in_use"].stock.dims["t"].items
+    regions = combined.stocks["in_use"].inflow.dims["r"].items
+    all_structures = combined.stocks["in_use"].inflow.dims["s"].items
+    all_functions = combined.stocks["in_use"].inflow.dims["e"].items
+
+    buildings = [b for b in all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
+    functions = [f for f in all_functions if str(f) in FUNCTION_DISPLAY_NAMES]
+
+    series = build_series(buildings, functions)
+
+    plot_global(combined, td, time, series, f"fig1_demand_by_structure_global_{ssp}")
+    plot_regional(
+        combined, td, time, series, f"fig1_demand_by_structure_h12_{ssp}",
+        regions, REGION_DISPLAY_NAMES, ncols=4,
+    )
+    plot_regional(
+        combined, td, time, series, f"fig1_demand_by_structure_agg_{ssp}",
+        AGG_REGION_ORDER, {}, ncols=3, include_world=True,
+    )
+
+
+for _ssp in selected_scenarios():
+    run(_ssp)
 
 print("END")
