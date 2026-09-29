@@ -59,6 +59,12 @@ def extend_end_use_intensive[T: fd.FlodymArray](arr: T, extended_end_use_dim: fd
 
 class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
 
+    @property
+    def bu_mask(self) -> dict:
+        """Index mask selecting the bottom-up-resolved end uses (b: RS/RM/Com) within the
+        extended end use dimension (e)."""
+        return {"e": self.dims["b"]}
+
     def compute(self, td_in_use: fd.Stock, historic_trade: TradeSet):
         """
         Perform all computations for the MFA system.
@@ -75,14 +81,18 @@ class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
         3. Extend the td inflow (from `td_in_use`, end uses u) to extended end uses and
            structures (e, s) and calculate the inflow-driven DSM to get the extended td stock.
         4. Blend historic td into future bu stock for the end uses the bottom-up model
-           resolves (b); Ind, Civ and mortar stay td.
-        5. Compute the complete MFA with the blended stock and historic trade.
+           resolves (b), for both concrete and mortar (mortar's bu-side trajectory is
+           derived from the bu concrete stock, since it has no independent bottom-up
+           model); only Ind and Civ stay td.
+        5. Combine the blended stock into the full stock.
+        6. Compute the complete MFA with the combined stock and historic trade.
         """
 
         self.compute_floorspace_stock()
         self.compute_bottom_up_stock()
         self.extend_top_down_stock(td_in_use)
-        combined_stock = self.blend_stocks()
+        blended_stock = self.blend_stocks()
+        combined_stock = self.combine_stocks(blended_stock, couple_mortar=True)
         super().compute(combined_stock, historic_trade, stock_is_cement=False)
 
     def compute_floorspace_stock(self):
@@ -120,7 +130,10 @@ class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
         MI-weighted mass shares (see `_concrete_mass_shares`); Com concrete is split
         over structures only. Ind, Civ and all mortar carry no structural resolution
         and are assigned to the unspecified structure U; residential mortar is split
-        into dwelling types by floor area.
+        into dwelling types by floor area. The RS/RM/Com mortar allocation here may be
+        provisional: it is used as the historic reference for mortar's own blend in
+        `blend_stocks`, and overwritten by the blended result in `combine_stocks` if
+        `couple_mortar` is True.
         """
         stk = self.stocks
         inflow = stk["td_in_use"].inflow
@@ -178,37 +191,77 @@ class StockDrivenBottomUpCementMFASystem(StockDrivenCementMFASystem):
 
         return floor_area_split * mi / avg_mi
 
+    def _mortar_to_concrete_ratio(self) -> fd.FlodymArray:
+        """Regional product-mass ratio of mortar to concrete, derived from each
+        material's mass per unit cement consumed (constant over time). Mortar has no
+        independent bottom-up model, so this ratio is used to derive a bu-side mortar
+        trajectory from the bu concrete stock (see `blend_stocks`).
+        """
+        prm = self.parameters
+        product_mass_per_cement = prm["product_material_split"] / prm["cement_ratio"]
+        return product_mass_per_cement[{"m": "mortar"}] / product_mass_per_cement[{"m": "concrete"}]
+
     def blend_stocks(self) -> fd.FlodymArray:
-        """Combine the bu and td stocks into one:
-        Blend smoothly between historic td and future bu concrete stock for the end uses
-        the bottom-up model resolves (b: RS/RM/Com); Ind, Civ and all mortar stay td.
+        """Blend smoothly between historic td and future bu stock for the end uses the
+        bottom-up model resolves (b: RS/RM/Com), separately for concrete and mortar.
+        Concrete blends directly against its own bu-driven trajectory. Mortar has no
+        independent bottom-up model, so its bu-side trajectory is derived from the bu
+        concrete stock via `_mortar_to_concrete_ratio`, then blended against its own
+        historic td trajectory the same way as concrete; this preserves the true
+        historic mortar values, unlike coupling mortar to concrete only after blending.
+        Returns the blended stock restricted to the bu-resolved end uses, resolved by
+        material (dims of `bu_in_use` plus `m`); use `combine_stocks` to insert it into
+        the full stock.
         """
         stk = self.stocks
         td_stock_expanded = stk["td_in_use"].stock
+        bu_concrete = stk["bu_in_use"].stock
+        bu_by_material = {
+            "concrete": bu_concrete,
+            "mortar": bu_concrete * self._mortar_to_concrete_ratio(),
+        }
 
-        # restrict the td stock to the bottom-up-resolved end uses
-        bu_mask = {"e": self.dims["b"]}
-        reduced_td_stock = td_stock_expanded[
-            {
-                **bu_mask,
-                "m": "concrete",
-                "t": self.dims["h"],
-            }
-        ]
+        blended_stock = fd.FlodymArray(dims=bu_concrete.dims.append(self.dims["m"]))
+        for material, bu_material in bu_by_material.items():
+            # restrict the td stock to the bottom-up-resolved end uses
+            reduced_td_stock = td_stock_expanded[
+                {
+                    **self.bu_mask,
+                    "m": material,
+                    "t": self.dims["h"],
+                }
+            ]
 
-        # Lifetime independent blend
-        blender = CriticallyDampedBlender(
-            time=self.dims["t"].items,
-            historical=reduced_td_stock.values,
-            prediction=stk["bu_in_use"].stock.values,
-        )
-        blended_stock = fd.FlodymArray.full_like(
-            other=stk["bu_in_use"].stock,
-            fill_value=blender.blend(),
-        )
+            # Lifetime independent blend
+            blender = CriticallyDampedBlender(
+                time=self.dims["t"].items,
+                historical=reduced_td_stock.values,
+                prediction=bu_material.values,
+            )
+            blended_stock[{"m": material}] = fd.FlodymArray.full_like(
+                other=bu_concrete,
+                fill_value=blender.blend(),
+            )
+        return blended_stock
 
+    def combine_stocks(
+        self, blended_stock: fd.FlodymArray, couple_mortar: bool = True
+    ) -> fd.FlodymArray:
+        """Insert the blended stock (see `blend_stocks`) into the full td stock for the
+        bottom-up-resolved end uses (b: RS/RM/Com); Ind and Civ (both materials) stay td.
+        Concrete is always taken from the blend. If `couple_mortar` is set, mortar is
+        taken from the blend as well (already blended against its own historic td
+        trajectory, see `blend_stocks`); otherwise mortar stays at its provisional
+        td-derived allocation (see `extend_top_down_stock`).
+        """
+        td_stock_expanded = self.stocks["td_in_use"].stock
         combined_stock = td_stock_expanded.copy()
-        combined_stock[{**bu_mask, "m": "concrete"}] = blended_stock
+
+        if couple_mortar:
+            combined_stock[self.bu_mask] = blended_stock
+        else:
+            combined_stock[{**self.bu_mask, "m": "concrete"}] = blended_stock[{"m": "concrete"}]
+
         return combined_stock
 
     def _set_lifetime(self, stock_name: str):
