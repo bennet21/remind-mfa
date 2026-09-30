@@ -18,8 +18,10 @@ from remind_mfa.common.common_definition import ExtrapolationDefinition
 from remind_mfa.common.data_blending import (
     BLEND_TYPES,
     CriticallyDampedBlender,
+    _adjusting_constant,
     blend,
     blending_factor,
+    select_trend_window,
 )
 from remind_mfa.common.parameter_extrapolation import (
     ParameterExtrapolation,
@@ -352,11 +354,80 @@ def test_split_infeasible_target_raises():
 
 def test_critically_damped_blender():
     time = np.arange(2000, 2101)
-    historical = np.arange(6, dtype=float).reshape(-1, 1)  # ramp 0..5
+    historical = np.arange(21, dtype=float).reshape(-1, 1)  # ramp 0..20
     prediction = np.full((len(time), 1), 50.0)
     blended = CriticallyDampedBlender(
         time=time, historical=historical, prediction=prediction
-    ).blend(approaching_time=10)
+    ).blend(approaching_time=20)
 
-    np.testing.assert_allclose(blended[:6], historical)  # history preserved exactly
+    np.testing.assert_allclose(blended[:21], historical)  # history preserved exactly
     assert abs(blended[-1, 0] - 50.0) < 0.5  # converges to the prediction long-term
+
+
+def test_critically_damped_blender_window_override():
+    time = np.arange(1950, 2101)
+    history_time = time[:73]
+    historical = np.sqrt(history_time - 1940.0).reshape(-1, 1)
+    prediction = np.full((len(time), 1), 10.0)
+    blender = CriticallyDampedBlender(time=time, historical=historical, prediction=prediction)
+
+    automatic = blender.blend(approaching_time=20)
+    manual = blender.blend(approaching_time=20, velocity_window=30, acceleration_window=30)
+    assert not np.allclose(automatic, manual)
+    with pytest.raises(ValueError, match="Window must be an integer"):
+        blender.blend(velocity_window=1)  # too few values for a quadratic fit
+
+
+@pytest.mark.parametrize(
+    "degree, derivative_order, expected",
+    [(1, 0, 0.8941), (2, 1, 0.7643), (3, 2, 0.7776), (3, 0, 0.8718), (5, 0, 0.8819)],
+)
+def test_adjusting_constant_matches_fan_gijbels_table_1(degree, derivative_order, expected):
+    # Epanechnikov kernel 3/4 (1 - u^2) on [-1, 1]; odd moments vanish
+    orders = np.arange(2 * degree + 3)
+    even = orders % 2 == 0
+    moments = np.where(even, 0.75 * (2 / (orders + 1) - 2 / (orders + 3)), 0.0)
+    squared_moments = np.where(
+        even, 0.5625 * (2 / (orders + 1) - 4 / (orders + 3) + 2 / (orders + 5)), 0.0
+    )
+    adjusting_constant = _adjusting_constant(degree, derivative_order, moments, squared_moments)
+    assert adjusting_constant == pytest.approx(expected, abs=1e-4)
+
+
+def test_trend_window_bias_is_exact_for_quartic_polynomial():
+    # the pilot fit (degree 4) is exact, so the estimated bias of the quadratic fit's slope
+    # must equal its actual error, and the estimated variance must vanish
+    time = np.arange(1950, 2023, dtype=float)
+    offsets = time - time[-1]
+    quartic = 1 + 0.5 * offsets + 0.02 * offsets**2 + 1e-3 * offsets**3 + 1e-5 * offsets**4
+    values = np.stack([quartic, 2 * quartic, -quartic], axis=1).reshape(len(time), 3, 1)
+
+    selection = select_trend_window(time, values, derivative_order=1)
+
+    true_slope = np.array([0.5, 1.0, -0.5]).reshape(3, 1)
+    assert selection.derivative.shape == (len(selection.windows), 3, 1)
+    np.testing.assert_allclose(selection.bias, selection.derivative - true_slope, atol=1e-8)
+    np.testing.assert_allclose(selection.variance, 0.0, atol=1e-12)
+
+
+def test_trend_window_estimate_matches_polynomial_fit():
+    time = np.arange(1950, 2023, dtype=float)
+    values = np.log(time - 1900).reshape(-1, 1)
+    selection = select_trend_window(time, values, derivative_order=2)
+
+    window = 15
+    polynomial = np.polynomial.Polynomial.fit(time[-window - 1 :], values[-window - 1 :, 0], 3)
+    assert selection.derivative_at(window)[0] == pytest.approx(polynomial.deriv(2)(time[-1]))
+
+
+def test_trend_window_grows_with_noise():
+    rng = np.random.default_rng(0)
+    time = np.arange(1900, 2023, dtype=float)
+    logistic = 1 / (1 + np.exp(-(time - 2010) / 15))
+
+    def median_window(noise_level: float) -> float:
+        noise = noise_level * rng.standard_normal((len(time), 40))
+        selection = select_trend_window(time, logistic[:, None] + noise, derivative_order=1)
+        return np.median(selection.selected_window)
+
+    assert median_window(0.02) > median_window(0.001)
