@@ -31,6 +31,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from constants import (
+    BACKGROUND,
     AGG_REGION_COLORS,
     AGG_REGION_ORDER,
     CE_SHADE,
@@ -106,6 +107,7 @@ def load_scenario_data() -> dict[str, dict]:
 def save(fig, output_name: str, width: int, height: int):
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     png_path = (FIGURES_DIR / output_name).with_suffix(".png")
+    fig.update_layout(paper_bgcolor=BACKGROUND, plot_bgcolor=BACKGROUND)
     fig.write_image(png_path, width=width, height=height, scale=3)
     print(f"Saved figure to: {png_path}")
 

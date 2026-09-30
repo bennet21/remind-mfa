@@ -25,6 +25,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from constants import (
+    BACKGROUND,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
@@ -94,6 +95,7 @@ def country_table(region_values: dict[str, float], unit: str) -> pd.DataFrame:
 def save(fig, output_name: str, width: int, height: int):
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     png_path = (FIGURES_DIR / output_name).with_suffix(".png")
+    fig.update_layout(paper_bgcolor=BACKGROUND, plot_bgcolor=BACKGROUND)
     fig.write_image(png_path, width=width, height=height, scale=3)
     print(f"Saved figure to: {png_path}")
 

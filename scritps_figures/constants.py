@@ -5,6 +5,8 @@ import pyam
 PATH_CEMENT = Path("data_out")
 CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
+# Set to "rgba(0,0,0,0)" to export figures with a transparent background.
+BACKGROUND = "white"
 FIRST_MODEL_YEAR = 1900
 LAST_HISTORICAL_YEAR = 2023
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")

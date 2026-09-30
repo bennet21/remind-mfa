@@ -14,6 +14,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from constants import (
+    BACKGROUND,
     AGG_REGION_COLORS,
     AGG_REGION_ORDER,
     FIGURES_DIR,
@@ -45,6 +46,7 @@ def selected_scenarios() -> list[str]:
 def save(fig, output_name: str, width: int, height: int):
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     png_path = (FIGURES_DIR / output_name).with_suffix(".png")
+    fig.update_layout(paper_bgcolor=BACKGROUND, plot_bgcolor=BACKGROUND)
     fig.write_image(png_path, width=width, height=height, scale=3)
     print(f"Saved figure to: {png_path}")
 
