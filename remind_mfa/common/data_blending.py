@@ -1,4 +1,6 @@
-from typing import Optional, Union, Any
+import math
+from dataclasses import dataclass
+from typing import Any, NamedTuple, Union
 
 import flodym as fd
 import numpy as np
@@ -144,6 +146,328 @@ def prepare_array(value: Any, target_dims: fd.DimensionSet) -> fd.FlodymArray:
     return array
 
 
+@dataclass(frozen=True)
+class TrendWindowSelection:
+    """
+    Local polynomial estimates of a derivative at the last time step of a time series, for a
+    range of window sizes, together with their estimated bias and variance.
+
+    Created by `select_trend_window`, which describes the method. All arrays have the candidate
+    windows as first axis, followed by the spatial shape of the series.
+
+    Attributes:
+        windows (np.ndarray): Candidate window sizes in time steps. A window of size ``n`` fits
+            the ``n + 1`` most recent values.
+        derivative (np.ndarray): Derivative estimate for each window.
+        bias (np.ndarray): Estimated bias of the derivative estimate for each window.
+        variance (np.ndarray): Estimated variance of the derivative estimate for each window.
+        pilot_window (np.ndarray): Window of the pilot fit from which bias and variance are
+            estimated. Shape ``(spatial...)``.
+        selected_window (np.ndarray): Window chosen by the search over the estimated mean
+            squared error. Shape ``(spatial...)``.
+    """
+
+    windows: np.ndarray
+    derivative: np.ndarray
+    bias: np.ndarray
+    variance: np.ndarray
+    pilot_window: np.ndarray
+    selected_window: np.ndarray
+
+    @property
+    def mse(self) -> np.ndarray:
+        """Estimated mean squared error of the derivative estimate for each window."""
+        return self.bias**2 + self.variance
+
+    def derivative_at(self, window: int | np.ndarray | None = None) -> np.ndarray:
+        """
+        Derivative estimate for the given window.
+
+        Args:
+            window (int | np.ndarray | None): Window size in time steps, either a scalar or an
+                array broadcastable to the spatial shape. Defaults to `selected_window`.
+
+        Returns:
+            np.ndarray: Derivative estimate, shape ``(spatial...)``.
+
+        Raises:
+            ValueError: If a window is not among the candidate `windows`.
+        """
+        window = self.selected_window if window is None else window
+        window = np.broadcast_to(window, self.derivative.shape[1:])
+        window_idx = np.searchsorted(self.windows, window)
+        if np.any(window_idx >= len(self.windows)) or np.any(self.windows[window_idx] != window):
+            raise ValueError(
+                f"Window must be an integer between {self.windows[0]} and {self.windows[-1]}."
+            )
+        return np.take_along_axis(self.derivative, window_idx[np.newaxis], axis=0)[0]
+
+
+def select_trend_window(
+    time: np.ndarray,
+    values: np.ndarray,
+    derivative_order: int,
+    degree: int | None = None,
+) -> TrendWindowSelection:
+    """
+    Estimate a derivative at the last time step of a time series by local polynomial fits over
+    the most recent values, and choose the window size of the fit in a data-driven way.
+
+    The window is chosen by the refined bandwidth selector of Fan & Gijbels (1995), Section 4.1
+    "Constant bandwidth", evaluated at the single point of interest, the last time step. The
+    local fits use a one-sided uniform kernel, i.e. ordinary least squares over the ``n + 1``
+    most recent values for a window of size ``n``.
+
+    1. Pilot fit: A polynomial of degree ``degree + 2`` is fitted for every window. The window
+       minimizing the Extended Cross-Validation criterion (Section 2) is multiplied by the
+       adjusting constant for estimating the coefficient of order ``degree + 1``. The fit over
+       this pilot window provides estimates of the coefficients of order ``degree + 1`` and
+       ``degree + 2`` and of the noise variance.
+    2. For every window, the bias of the derivative estimate of the degree ``degree`` fit is
+       estimated from the pilot coefficients (Section 3, Eq. 3.3) and its variance from the pilot
+       noise variance (Eq. 3.5). Their sum, the estimated mean squared error, is minimized by
+       the search of Section 4.2: starting from the smallest window, the window grows by 10%
+       (at least one time step) until the criterion increased three times in a row. This
+       avoids large windows unless necessary, where the bias estimate extrapolates the pilot
+       polynomial beyond its window.
+
+    Deviations from the paper, owing to the evaluation at the boundary of short series:
+
+    - The pilot window minimizes the Extended Cross-Validation criterion over all windows. The
+      search of Section 4.2 stops there at the first bump caused by noise.
+    - Pilot windows leave at least as many residual degrees of freedom as the pilot polynomial
+      has coefficients, because a noise variance estimated from fewer values makes the
+      Extended Cross-Validation criterion unreliable.
+    - The moments ``s_{n,j}`` with ``j > degree + 2`` are not set to zero in the bias estimate.
+      The paper does this to reduce collinearity in the interior, where these moments are of
+      higher order; for one-sided windows they contribute to the leading bias term.
+
+    Reference:
+        Fan, J. and Gijbels, I. (1995). Data-driven bandwidth selection in local polynomial
+        fitting: variable bandwidth and spatial adaptation. Journal of the Royal Statistical
+        Society, Series B, 57(2), 371-394.
+
+    Args:
+        time (np.ndarray): 1-D array of equally spaced time values.
+        values (np.ndarray): Data with time as first axis and arbitrary spatial shape
+            thereafter. Each spatial element is treated as a separate series.
+        derivative_order (int): Order of the derivative to estimate.
+        degree (int | None): Degree of the local polynomial. Defaults to
+            ``derivative_order + 1``, as recommended by the paper.
+
+    Returns:
+        TrendWindowSelection: Estimates, bias and variance for all candidate windows.
+
+    Raises:
+        ValueError: If ``degree`` is smaller than ``derivative_order``, or if the series is too
+            short for the pilot fit.
+    """
+    degree = derivative_order + 1 if degree is None else degree
+    if degree < derivative_order:
+        raise ValueError(
+            f"Degree {degree} must be at least the derivative order {derivative_order}."
+        )
+    time = np.asarray(time, dtype=float)
+    values = np.asarray(values, dtype=float)
+    spatial_shape = values.shape[1:]
+    series = values.reshape(len(values), -1)
+
+    pilot_window, pilot_coefficients, pilot_noise_variance = _pilot_fit(time, series, degree)
+    high_orders = np.arange(degree + 1, degree + 3)
+    pilot_high_coefficients = pilot_coefficients[high_orders]
+
+    windows = np.arange(degree, len(time))
+    derivative = np.empty((len(windows), series.shape[1]))
+    bias = np.empty_like(derivative)
+    variance = np.empty_like(derivative)
+    derivative_factor = math.factorial(derivative_order)
+    for window_idx, window in enumerate(windows):
+        fit = _fit_window(time, series, window, degree)
+        # the coefficients beta_j = m^(j) / j! of the scaled time u = (t - t_last) / scale
+        # are beta_j * scale**j; the derivative of order nu thus gets a factor nu! / scale**nu
+        to_derivative = derivative_factor / fit.scale**derivative_order
+        derivative[window_idx] = derivative_factor * fit.coefficients[derivative_order]
+
+        # Eq. (3.3): bias = S_n^-1 X^T tau, with tau the next two Taylor terms of the pilot fit
+        scaled_offsets = fit.design[:, 1]
+        scaled_high_coefficients = pilot_high_coefficients * fit.scale ** high_orders[:, None]
+        taylor_remainder = scaled_offsets[:, None] ** high_orders @ scaled_high_coefficients
+        scaled_bias = fit.inverse_moments @ fit.design.T @ taylor_remainder
+        bias[window_idx] = to_derivative * scaled_bias[derivative_order]
+
+        # Eq. (3.5): for a uniform kernel, S_n^-1 S_n^* S_n^-1 reduces to S_n^-1
+        inverse_moment = fit.inverse_moments[derivative_order, derivative_order]
+        variance[window_idx] = to_derivative**2 * inverse_moment * pilot_noise_variance
+
+    selected_window = _search_minimum(windows, bias**2 + variance)
+    return TrendWindowSelection(
+        windows=windows,
+        derivative=derivative.reshape((len(windows),) + spatial_shape),
+        bias=bias.reshape((len(windows),) + spatial_shape),
+        variance=variance.reshape((len(windows),) + spatial_shape),
+        pilot_window=pilot_window.reshape(spatial_shape),
+        selected_window=selected_window.reshape(spatial_shape),
+    )
+
+
+def _search_minimum(
+    windows: np.ndarray,
+    criterion: np.ndarray,
+    growth_factor: float = 1.1,
+    max_consecutive_increases: int = 3,
+) -> np.ndarray:
+    """
+    Minimize a criterion over windows by the search of Fan & Gijbels (1995), Section 4.2.
+
+    Starting from the smallest window, the window is inflated by ``growth_factor``, by at least
+    one time step, until the criterion increased ``max_consecutive_increases`` times in a row.
+    The evaluated window with the smallest criterion is returned.
+
+    Args:
+        windows (np.ndarray): Consecutive integer windows, shape ``(n_windows,)``.
+        criterion (np.ndarray): Criterion per window and series, shape ``(n_windows, n_series)``.
+        growth_factor (float): Factor by which the window grows in each step. Defaults to 1.1.
+        max_consecutive_increases (int): Number of consecutive increases after which the search
+            stops. Defaults to 3.
+
+    Returns:
+        np.ndarray: Selected window per series, shape ``(n_series,)``.
+    """
+    grid = [windows[0]]
+    while (next_window := max(grid[-1] + 1, round(growth_factor * grid[-1]))) <= windows[-1]:
+        grid.append(next_window)
+    grid = np.array(grid)
+    grid_criterion = criterion[grid - windows[0]]
+
+    evaluated = np.ones_like(grid_criterion, dtype=bool)
+    consecutive_increases = np.zeros(criterion.shape[1], dtype=int)
+    for grid_idx in range(1, len(grid)):
+        evaluated[grid_idx] = evaluated[grid_idx - 1] & (
+            consecutive_increases < max_consecutive_increases
+        )
+        increased = grid_criterion[grid_idx] > grid_criterion[grid_idx - 1]
+        consecutive_increases = np.where(increased, consecutive_increases + 1, 0)
+    evaluated_criterion = np.where(evaluated, grid_criterion, np.inf)
+    return grid[np.argmin(evaluated_criterion, axis=0)]
+
+
+class _WindowFit(NamedTuple):
+    """Least squares polynomial fit over the most recent values of several series."""
+
+    scale: float
+    """Length of the window in time units, used to scale the time offsets to [-1, 0]."""
+    design: np.ndarray
+    """Design matrix of the scaled time offsets, shape ``(window + 1, degree + 1)``."""
+    inverse_moments: np.ndarray
+    """Inverse of ``design.T @ design``."""
+    coefficients: np.ndarray
+    """Polynomial coefficients in unscaled time, shape ``(degree + 1, n_series)``."""
+    noise_variance: np.ndarray
+    """Residual sum of squares per degree of freedom, shape ``(n_series,)``."""
+
+
+def _fit_window(time: np.ndarray, series: np.ndarray, window: int, degree: int) -> _WindowFit:
+    """Fit a polynomial to the ``window + 1`` most recent values, centered at the last time."""
+    offsets = time[-window - 1 :] - time[-1]
+    scale = -offsets[0]
+    design = np.vander(offsets / scale, degree + 1, increasing=True)
+    inverse_moments = np.linalg.inv(design.T @ design)
+    window_values = series[-window - 1 :]
+    scaled_coefficients = inverse_moments @ design.T @ window_values
+    residuals = window_values - design @ scaled_coefficients
+    residual_dof = window - degree
+    if residual_dof > 0:
+        noise_variance = np.sum(residuals**2, axis=0) / residual_dof
+    else:
+        noise_variance = np.full(series.shape[1], np.nan)
+    coefficients = scaled_coefficients / scale ** np.arange(degree + 1)[:, None]
+    return _WindowFit(scale, design, inverse_moments, coefficients, noise_variance)
+
+
+def _pilot_fit(
+    time: np.ndarray, series: np.ndarray, degree: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Pilot stage of `select_trend_window`: fit polynomials of degree ``degree + 2`` and choose
+    their window by the Extended Cross-Validation criterion (Fan & Gijbels 1995, Eq. 2.4)
+    ``ECV = sigma^2 (1 + (p + 1) V_0)``, with ``V_0`` the first diagonal element of ``S_n^-1``.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray]: The pilot window per series, the pilot
+        polynomial coefficients of shape ``(degree + 3, n_series)``, and the pilot noise
+        variance per series.
+    """
+    pilot_degree = degree + 2
+    n_coefficients = pilot_degree + 1
+    # leave as many residual degrees of freedom as there are coefficients
+    min_window = 2 * n_coefficients - 1
+    max_window = len(time) - 1
+    if max_window < min_window:
+        raise ValueError(
+            f"At least {min_window + 1} time steps are needed to select the window of a "
+            f"degree {degree} fit, but got {len(time)}."
+        )
+
+    windows = np.arange(min_window, max_window + 1)
+    fits = [_fit_window(time, series, window, pilot_degree) for window in windows]
+    ecv = np.array(
+        [fit.noise_variance * (1 + n_coefficients * fit.inverse_moments[0, 0]) for fit in fits]
+    )
+    ecv_window = windows[np.argmin(ecv, axis=0)]
+
+    # uniform kernel on [-1, 0]: s_j = int u^j du, and K^2 = K
+    orders = np.arange(2 * pilot_degree + 3)
+    uniform_moments = (-1.0) ** orders / (orders + 1)
+    adjusting_constant = _adjusting_constant(
+        pilot_degree, degree + 1, uniform_moments, uniform_moments
+    )
+    pilot_window = np.clip(np.round(adjusting_constant * ecv_window), min_window, max_window)
+    pilot_window = pilot_window.astype(int)
+
+    pilot_idx = pilot_window - min_window
+    series_idx = np.arange(series.shape[1])
+    coefficients = np.stack([fit.coefficients for fit in fits])[pilot_idx, :, series_idx].T
+    noise_variance = np.stack([fit.noise_variance for fit in fits])[pilot_idx, series_idx]
+    return pilot_window, coefficients, noise_variance
+
+
+def _adjusting_constant(
+    degree: int,
+    derivative_order: int,
+    kernel_moments: np.ndarray,
+    squared_kernel_moments: np.ndarray,
+) -> float:
+    """
+    Ratio ``adj_{p,nu}`` of the bandwidth minimizing the mean squared error of the derivative
+    estimate of order ``nu`` to the bandwidth minimizing the Extended Cross-Validation
+    criterion, for a local polynomial of degree ``p`` (Fan & Gijbels 1995, Section 2).
+
+    Args:
+        degree (int): Degree ``p`` of the local polynomial.
+        derivative_order (int): Derivative order ``nu``.
+        kernel_moments (np.ndarray): ``int u^j K(u) du`` for ``j = 0, ..., 2p + 2``.
+        squared_kernel_moments (np.ndarray): ``int u^j K(u)^2 du`` for ``j = 0, ..., 2p + 2``.
+
+    Returns:
+        float: The adjusting constant.
+    """
+    indices = np.add.outer(np.arange(degree + 1), np.arange(degree + 1))
+    inverse_moments = np.linalg.inv(kernel_moments[indices])
+    variance_factors = inverse_moments @ squared_kernel_moments[indices] @ inverse_moments
+    bias_moments = kernel_moments[degree + 1 : 2 * degree + 2]
+    bias_factor = (inverse_moments @ bias_moments)[derivative_order]
+    residual_factor = (
+        kernel_moments[2 * degree + 2] - bias_moments @ inverse_moments @ bias_moments
+    ) / kernel_moments[0]
+    ratio = (
+        (2 * derivative_order + 1)
+        * variance_factors[derivative_order, derivative_order]
+        * residual_factor
+        / ((degree + 1 - derivative_order) * variance_factors[0, 0] * bias_factor**2)
+    )
+    return ratio ** (1 / (2 * degree + 3))
+
+
 class CriticallyDampedBlender:
 
     def __init__(
@@ -151,7 +475,6 @@ class CriticallyDampedBlender:
         time: Union[np.ndarray, list],
         historical: np.ndarray,
         prediction: np.ndarray,
-        lifetime: Optional[np.ndarray] = None,
     ):
         """
         Args:
@@ -160,8 +483,6 @@ class CriticallyDampedBlender:
             historical (np.ndarray): Historical stock data with time as the first axis.
             prediction (np.ndarray): Extrapolated stock data from the regression, same shape
                 as the full output (covering both historical and future period in first axis).
-            lifetime (Optional[np.ndarray]): Lifetime used to dynamically determine trend window size.
-            Should have the same shape as prediction/historical, except time (0th axis)
         """
         self.time = np.array(time)
         self.historical = historical
@@ -177,15 +498,26 @@ class CriticallyDampedBlender:
             self.historical.shape[0] <= self.prediction.shape[0]
         ), "Historical data cannot be longer than prediction."
 
-        self.lifetime = lifetime
-        if self.lifetime is not None:
-            assert (
-                self.lifetime.shape == self.prediction.shape[1:]
-            ), "Lifetime must match spatial shape of prediction."
+    def trend_window_selection(self, derivative_order: int) -> TrendWindowSelection:
+        """
+        Estimates of the historical trend's derivative at the last historical time step for all
+        fitting windows, with estimated bias and variance. See `select_trend_window`.
+
+        Args:
+            derivative_order (int): 1 for the velocity, 2 for the acceleration.
+
+        Returns:
+            TrendWindowSelection: Estimates, bias and variance for all candidate windows.
+        """
+        return select_trend_window(
+            self.time[: len(self.historical)], self.historical, derivative_order
+        )
 
     def blend(
         self,
         approaching_time: float = 50,
+        velocity_window: int | np.ndarray | None = None,
+        acceleration_window: int | np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Blend historical and extrapolated values using a forced critically damped system
@@ -199,10 +531,12 @@ class CriticallyDampedBlender:
         k = 6.30 / approaching_time the damping parameter. The initial position is the
         last historical value; the initial velocity and acceleration are estimated from
         local polynomial fits to the recent historical trend, so position, slope, and
-        curvature are all continuous at the transition point. The ODE is integrated with
-        a semi-implicit Euler method; P''(t) is estimated with a look-ahead so the
-        controller reacts to upcoming changes in P (e.g. saturation) before they occur,
-        while P'(t) uses the plain local slope.
+        curvature are all continuous at the transition point. The fitting windows are
+        chosen per series by the data-driven selector in `select_trend_window`, unless
+        given explicitly. The ODE is integrated with a semi-implicit Euler method;
+        P''(t) is estimated with a look-ahead so the controller reacts to upcoming
+        changes in P (e.g. saturation) before they occur, while P'(t) uses the plain
+        local slope.
 
         Args:
             approaching_time (float): Characteristic timescale in years. Sets the damping
@@ -211,6 +545,11 @@ class CriticallyDampedBlender:
                 ``e^{-x}(1 + x + x**2/2) = 0.05`` for ``x = k * approaching_time``.
                 Must satisfy ``k * dt <= 0.5`` for
                 numerical stability, i.e. ``approaching_time >= 12.6 years``. Defaults to 50.
+            velocity_window (int | np.ndarray | None): Window in time steps of the fit for the
+                initial velocity, scalar or per series. Defaults to the data-driven choice.
+            acceleration_window (int | np.ndarray | None): Window in time steps of the fit for
+                the initial acceleration, scalar or per series. Defaults to the data-driven
+                choice.
 
         Returns:
             np.ndarray: Stock array with exact historical values preserved up to the last
@@ -224,21 +563,8 @@ class CriticallyDampedBlender:
 
         # 2. Set the initial conditions at the transition point
         y0 = self.historical[last_history_idx, :]
-        trend_window = self._lifetime_dependent_n()
-        v0, _ = self._trend_derivatives(
-            self.time,
-            self.historical,
-            trend_window,
-            last_history_idx,
-            deg=1,
-        )
-        _, a0 = self._trend_derivatives(
-            self.time,
-            self.historical,
-            np.maximum(2, trend_window),
-            last_history_idx,
-            deg=2,
-        )
+        v0 = self.trend_window_selection(derivative_order=1).derivative_at(velocity_window)
+        a0 = self.trend_window_selection(derivative_order=2).derivative_at(acceleration_window)
 
         # 3. Integrate to find the blended future path Y(t)
         y_future = self._integrate_transition(
@@ -383,123 +709,3 @@ class CriticallyDampedBlender:
         w = (look_pos - lo).reshape((-1,) + (1,) * (p_array.ndim - 1))
         ap_lookahead = (1 - w) * ap_raw[lo] + w * ap_raw[hi]
         return vp_raw, ap_lookahead
-
-    def _lifetime_dependent_n(
-        self,
-        lower_lt: float = 3.0,
-        upper_lt: float = 30.0,
-        min_n: int = 1,
-        max_n: int = 10,
-    ) -> np.ndarray:
-        """
-        Calculate a dynamically scaled smoothing window size based on product lifetime.
-
-        Short-lifetime products have volatile stocks and benefit from more smoothing;
-        long-lifetime products have high inertia and need less. Window sizes are mapped
-        from ``max_n`` (shortest lifetime) to ``min_n`` (longest lifetime) on a logarithmic
-        scale.
-
-        Args:
-            lower_lt (float): Lower bound for clipping product lifetime in years. Defaults to 3.0.
-            upper_lt (float): Upper bound for clipping product lifetime in years. Defaults to 30.0.
-            min_n (int): Minimum smoothing window size (applied to long-lifetime products).
-                Defaults to 1.
-            max_n (int): Maximum smoothing window size (applied to short-lifetime products).
-                Defaults to 10.
-
-        Returns:
-            np.ndarray: Array of integer window sizes (number of time steps minus one) shaped
-            according to the spatial dimensions of the output stock array.
-        """
-
-        if self.lifetime is None:
-            return np.full_like(self.prediction[0], min_n, dtype=int)
-
-        # 1. Clip lifetimes to strictly enforce bounds
-        lt_clip = np.clip(self.lifetime, lower_lt, upper_lt)
-
-        # 2. Logarithmic normalization (0.0 for shortest, 1.0 for longest)
-        log_lt = np.log(lt_clip)
-        log_lower = np.log(lower_lt)
-        log_upper = np.log(upper_lt)
-
-        if log_upper == log_lower:  # Prevent division by zero edge-case
-            return np.full_like(self.lifetime, max_n, dtype=int)
-
-        alpha = (log_lt - log_lower) / (log_upper - log_lower)
-
-        # 3. Inverted mapping: alpha=0 maps to max_n, alpha=1 maps to min_n
-        n_float = max_n - alpha * (max_n - min_n)
-
-        # 4. Round to nearest integer for array indexing/window sizing
-        return np.round(n_float).astype(int)
-
-    def _trend_derivatives(
-        self,
-        t: np.ndarray,
-        y: np.ndarray,
-        window_size: Union[int, np.ndarray],
-        idx: int,
-        deg: int = 1,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Calculate the first and second derivative of ``y`` at a given time index across
-        all spatial dimensions.
-
-        For each dimension element combination a polynomial of degree ``deg`` is fitted to
-        the ``window_size + 1`` most recent time steps ending at ``idx``, and the analytical
-        derivatives of that polynomial are evaluated at ``t[idx]``. For ``deg=1``, the
-        second derivative is zero.
-
-        Args:
-            t (np.ndarray): 1-D array of time values.
-            y (np.ndarray): Data array with time as the first axis, arbitrary spatial shape thereafter.
-            window_size (int or np.ndarray): Smoothing window size. Either a scalar applied to all spatial
-                positions or an array matching the spatial shape of ``y``. Must be at least ``deg``
-                everywhere so the fit is well-determined.
-            idx (int): Time index at which to evaluate the derivatives (typically the last
-                historical index).
-            deg (int): Polynomial degree for the local fit. Defaults to 1.
-
-        Returns:
-            tuple[np.ndarray, np.ndarray]: Arrays of first and second derivatives, each with
-            the same shape as ``y.shape[1:]``.
-
-        Raises:
-            ValueError: If any entry of ``window_size`` is smaller than ``deg``.
-            ValueError: If ``window_size`` is an array whose shape does not match the spatial shape of ``y``.
-        """
-
-        if not np.all(window_size >= deg):
-            raise ValueError(
-                f"Window size {window_size} must be at least {deg} to fit a polynomial of degree {deg}."
-            )
-
-        dim_shape = y.shape[1:]  # assuming time is the first dimension
-        deriv_array = np.zeros(dim_shape, dtype=float)
-        second_deriv_array = np.zeros(dim_shape, dtype=float)
-
-        # Standardize n into an array so we can index it easily
-        if isinstance(window_size, (int, np.integer)):
-            window_sizes = np.full(dim_shape, window_size, dtype=int)
-        else:
-            window_sizes = np.asarray(window_size)
-            if window_sizes.shape != dim_shape:
-                raise ValueError(
-                    f"Shape of window_size {window_sizes.shape} must match spatial shape of y {dim_shape}."
-                )
-
-        for spatial_idx in np.ndindex(dim_shape):
-            start_idx = max(0, idx - window_sizes[spatial_idx])
-
-            time_slice = slice(start_idx, idx + 1)
-            t_window = t[time_slice]
-            y_window = y[(time_slice,) + spatial_idx]
-
-            # Fit polynomial to this single 1D array
-            polynomial = np.polynomial.Polynomial.fit(t_window, y_window, deg=deg)
-
-            deriv_array[spatial_idx] = polynomial.deriv(1)(t[idx])
-            second_deriv_array[spatial_idx] = polynomial.deriv(2)(t[idx])
-
-        return deriv_array, second_deriv_array

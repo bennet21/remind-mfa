@@ -261,7 +261,6 @@ class CommonModel:
             target_dim_letters="all",
             end_use_good_letter=self.end_use_good_letter,
             bound_list=bound_list_obj,
-            lifetime=self.lifetime_limit(),
         )
         self.stock_handler.extrapolate()
 

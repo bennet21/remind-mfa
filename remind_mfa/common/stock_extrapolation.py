@@ -4,7 +4,7 @@ from unittest import case
 import flodym as fd
 import numpy as np
 from remind_mfa.common.data_blending import CriticallyDampedBlender
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union
 from pydantic import ConfigDict
 
 from remind_mfa.common.data_transformations import broadcast_trailing_dimensions, BoundList
@@ -37,8 +37,6 @@ class StockExtrapolation(RemindMFABaseModel):
     """do_gdppc_accumulation (bool): Flag to perform GDP per capita accumulation. Defaults to True."""
     transition_smoothing: str = "critically_damped"
     """transition_smoothing (str): Method for blending between historical and future stock. Possible values are "critically_damped", "shift_zeroth_order", "none". Defaults to "critically_damped"."""
-    lifetime: Optional[fd.FlodymArray] = None
-    """lifetime of the stock, used to determine the number of timesteps that are used for the average slope calculation in the critically damped blend."""
 
     def extrapolate(self):
         """Preprocessing and extrapolation."""
@@ -187,7 +185,6 @@ class StockExtrapolation(RemindMFABaseModel):
                     time=self.dims["t"].items,
                     historical=self.historic_stocks_pc.values,
                     prediction=self.fitted_regression.values,
-                    lifetime=self._prepare_lifetime_for_blender(),
                 )
                 approaching_time = 50
                 add_assumption_doc(
@@ -204,7 +201,10 @@ class StockExtrapolation(RemindMFABaseModel):
                     type="model assumption",
                     name="Usage of critically damped blend",
                     description=(
-                        "Critically damped blending is used to smoothly transition from historic trends to the extrapolation."
+                        "Critically damped blending is used to smoothly transition from historic trends to the extrapolation. "
+                        "Its initial slope and curvature are estimated from local polynomial fits to the recent history, "
+                        "with the fitting windows chosen per region and good by the refined bandwidth selector of "
+                        "Fan & Gijbels (1995)."
                     ),
                 )
             case "shift_zeroth_order":
@@ -231,9 +231,3 @@ class StockExtrapolation(RemindMFABaseModel):
     @property
     def n_historic(self):
         return self.dims["h"].len
-
-    def _prepare_lifetime_for_blender(self):
-        if self.lifetime is None:
-            return None
-        lifetime = self.lifetime.cast_to(self.dims_out)[{"t": self.dims["h"].items[-1]}].values
-        return lifetime
