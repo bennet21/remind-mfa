@@ -366,7 +366,7 @@ def plot_scenario(
         title=dict(text=SSP_LABELS[ssp], font=dict(size=16), x=0, xanchor="left"),
         xaxis=dict(
             title=dict(
-                text=f"Per capita {FIRST_MODEL_YEAR}\u20132100 (t CO\u2082/cap)",
+                text=f"Process emissons per capita {FIRST_MODEL_YEAR}\u20132100 (t CO\u2082/cap)",
                 font=dict(size=13),
             ),
             tickfont=dict(size=12),
@@ -377,7 +377,7 @@ def plot_scenario(
         ),
         xaxis2=dict(
             title=dict(
-                text=f"Absolute {FIRST_MODEL_YEAR}\u20132100 (Gt CO\u2082)", font=dict(size=13)
+                text=f"Process emissions {FIRST_MODEL_YEAR}\u20132100 (Gt CO\u2082)", font=dict(size=13)
             ),
             tickfont=dict(size=12),
             showgrid=True,
