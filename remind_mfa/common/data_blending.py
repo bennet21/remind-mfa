@@ -240,6 +240,14 @@ class CriticallyDampedBlender:
             deg=2,
         )
 
+        # 2b. Derivatives of the prediction P(t) itself, computed over the full
+        # historic+future timeline so the transition point is an interior point.
+        dt = self.time[1] - self.time[0]
+        vp_full = np.gradient(self.prediction, dt, axis=0, edge_order=2)
+        ap_full = np.gradient(vp_full, dt, axis=0, edge_order=2)
+        vp_future = vp_full[last_history_idx:]
+        ap_future = ap_full[last_history_idx:]
+
         # 3. Integrate to find the blended future path Y(t)
         y_future = self._integrate_transition(
             y0,
@@ -247,6 +255,8 @@ class CriticallyDampedBlender:
             a0,
             t_future,
             p_future,
+            vp_future,
+            ap_future,
             approaching_time,
         )
 
@@ -266,6 +276,8 @@ class CriticallyDampedBlender:
         a0: np.ndarray,
         t_array: np.ndarray,
         p_array: np.ndarray,
+        vp_array: np.ndarray,
+        ap_array: np.ndarray,
         approaching_time: float,
     ) -> np.ndarray:
         """
@@ -286,6 +298,10 @@ class CriticallyDampedBlender:
             t_array (np.ndarray): 1D array of time values starting at the transition point.
             p_array (np.ndarray): Target prediction array with time as the first axis,
                 shape ``(len(t_array), spatial...)``. Must be uniformly spaced in time.
+            vp_array (np.ndarray): P'(t), the local slope of the prediction, same shape as
+                ``p_array``.
+            ap_array (np.ndarray): P''(t), the raw (not yet look-ahead-shifted) curvature of
+                the prediction, same shape as ``p_array``.
             approaching_time (float): Characteristic timescale in years. Sets the damping
                 parameter ``k = 6.30 / approaching_time``.
 
@@ -296,7 +312,6 @@ class CriticallyDampedBlender:
             ValueError: If ``k * dt > 0.5``, i.e. ``approaching_time`` is too small relative
                 to the time step for the integration to be numerically stable.
         """
-        n_steps = len(t_array)
         dt = t_array[1] - t_array[0]
 
         # 6.30 is the solution to (1+x+x²/2)*exp(-x) = 0.05: the third-order critically
@@ -312,8 +327,8 @@ class CriticallyDampedBlender:
                 f"Use approaching_time >= {12.6 * dt:.1f}."
             )
 
-        # --- Precompute predictor velocity and look-ahead acceleration ---
-        vp_array, ap_array = self._calculate_derivatives(p_array, dt, n_steps, approaching_time)
+        # --- Apply the look-ahead shift to the precomputed acceleration ---
+        ap_array = self._lookahead_shift(ap_array, dt, approaching_time)
 
         # --- Initialize state ---
         y = np.zeros_like(p_array, dtype=float)
@@ -323,7 +338,7 @@ class CriticallyDampedBlender:
         y_curr, v_curr, a_curr = y[0].copy(), v[0].copy(), a[0].copy()
 
         # --- Integrate ---
-        for i in range(1, n_steps):
+        for i in range(1, len(t_array)):
             # 1. Compute jerk.
             da_dt = (
                 k**3 * (p_array[i - 1] - y_curr)
@@ -339,50 +354,48 @@ class CriticallyDampedBlender:
 
         return y
 
-    def _calculate_derivatives(
+    def _lookahead_shift(
         self,
-        p_array: np.ndarray,
+        arr: np.ndarray,
         dt: float,
-        n_steps: int,
         approaching_time: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
         """
-        Estimate P'(t) at each timestep, and P''(t + n_fwd(t)*dt) — the curvature of the
-        prediction looked up n_fwd steps ahead. Only the curvature term is shifted:
-        looking ahead lets it anticipate future changes in P (e.g. saturation), so the
-        derivative term of the controller begins reacting before P actually flattens,
-        preventing overshoot. The velocity term uses the plain local slope.
+        Shift a time-indexed array by a continuously decreasing look-ahead.
 
+        The time axis must be axis 0; all trailing dimensions are adjusted independently.
+        Looking ahead lets the controller's derivative term anticipate future changes in P
+        (e.g. saturation) and begin reacting before P actually flattens, preventing overshoot.
+
+        This function shifts arr(t) to ``arr(t + n_fwd(t) * dt)``.
         n_fwd ramps continuously from n_fwd_max down to 0 over the first half of
         approaching_time, then stays at 0 (plain local curvature). The continuous ramp
-        avoids the discrete jumps that arise from integer look-ahead steps. Both
-        derivatives are computed on the raw prediction first; only the curvature is then
-        sampled at the shifted position, so the ramp itself does not distort the estimate.
+        avoids the discrete jumps that arise from integer look-ahead steps.
+
+        Args:
+            arr (np.ndarray): Array to shift, with shape ``(n_steps, ...)`` and time on
+                axis 0, starting at the transition point.
+            dt (float): Spacing between consecutive time steps.
+            approaching_time (float): Duration over which the look-ahead ramps to zero.
 
         Returns:
-            tuple[np.ndarray, np.ndarray]: Local first derivative and look-ahead second
-            derivative of the prediction, each of shape ``(n_steps, spatial...)``.
+            np.ndarray: Look-ahead-shifted array, with the same shape as ``values``.
         """
+        n_steps = arr.shape[0]
         n_fwd_max = 5
         n_ramp_steps = max(1, int((approaching_time / 2) / dt))
 
         # Continuous look-ahead amount for each step: 5 → 0 over n_ramp_steps, then 0
         n_fwd_cont = n_fwd_max * np.maximum(0.0, 1.0 - np.arange(n_steps) / n_ramp_steps)
 
-        # Slope and curvature of p at every step
-        # (central differences; second-order one-sided at boundaries)
-        vp_raw = np.gradient(p_array, dt, axis=0)
-        ap_raw = np.gradient(vp_raw, dt, axis=0)
-
-        # For each step i, look n_fwd_cont[i] steps forward in the derivative arrays
+        # For each step i, look n_fwd_cont[i] steps forward in the derivative array
         look_pos = np.clip(np.arange(n_steps, dtype=float) + n_fwd_cont, 0, n_steps - 1)
 
         # Fractional interpolation between the two bracketing integer positions
         lo = look_pos.astype(int)
         hi = np.minimum(lo + 1, n_steps - 1)
-        w = (look_pos - lo).reshape((-1,) + (1,) * (p_array.ndim - 1))
-        ap_lookahead = (1 - w) * ap_raw[lo] + w * ap_raw[hi]
-        return vp_raw, ap_lookahead
+        w = (look_pos - lo).reshape((-1,) + (1,) * (arr.ndim - 1))
+        return (1 - w) * arr[lo] + w * arr[hi]
 
     def _lifetime_dependent_n(
         self,
