@@ -351,8 +351,8 @@ class CriticallyDampedBlender:
         excess_slope = np.maximum(vp_array - v0, 0.0)
         return vp_array - (1 - phase_in) * excess_slope
 
+    @staticmethod
     def _lookahead_shift(
-        self,
         arr: np.ndarray,
         dt: float,
         approaching_time: float,
@@ -444,8 +444,8 @@ class CriticallyDampedBlender:
         # 4. Round to nearest integer for array indexing/window sizing
         return np.round(n_float).astype(int)
 
+    @staticmethod
     def _trend_slope(
-        self,
         t: np.ndarray,
         y: np.ndarray,
         window_size: Union[int, np.ndarray],
