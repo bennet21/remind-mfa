@@ -1,9 +1,9 @@
 """Regenerate the cement model pickles that the figure scripts in this folder read from data_out.
 
 Run from the repo root: `uv run --no-sync python scritps_figures/generate_data.py`.
-Runs the cement model once per scenario in constants.SSP_PICKLENAMES. Parameter reconciliation
-and pickle export are forced on here regardless of config/default.toml, since the committed
-default has both off; nothing else in default.toml needs to be edited to regenerate the pickles.
+Runs the cement model once per scenario in constants.SSP_PICKLENAMES, with config/figs_cement.toml
+stacked on config/default.toml. The overlay turns on parameter reconciliation and pickle export,
+so default.toml does not need to be edited to regenerate the pickles.
 
 Rerun this after updating remind_mfa_data to refresh the figures' input data.
 """
@@ -20,15 +20,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(me
 
 
 def build_cfg(scenario: str) -> dict:
-    cfg = load_config(["default"], ModelNames.CEMENT)
+    cfg = load_config(["default", "figs_cement"], ModelNames.CEMENT)
     cfg["model_switches"]["scenario"] = scenario
     cfg["export"]["path"] = str(PATH_CEMENT)
-    cfg["export"]["prefix"] = "figs"
-    cfg["export"]["pickle"]["do_export"] = True
-    cfg["visualization"]["do_visualize"] = False
-    cfg["visualization"]["do_show_figs"] = False
-    cfg["model_switches"]["parameter_reconciliation"]["do_reconcile"] = True
-    cfg["model_switches"]["parameter_reconciliation"]["do_combine_mfas"] = True
     return cfg
 
 

@@ -1,0 +1,16 @@
+# Overlay on default.toml for the cement figure data (scritps_figures/generate_data.py).
+# The scenario and export path are set per run in generate_data.py.
+
+[base]
+    [base.visualization]
+        do_visualize = false
+        do_show_figs = false
+
+    [base.export]
+        prefix = "figs"
+        pickle.do_export = true
+
+[cement]
+    [cement.model_switches]
+        parameter_reconciliation.do_reconcile = true
+        parameter_reconciliation.do_combine_mfas = true
