@@ -12,12 +12,11 @@ import pandas as pd
 from constants import (
     AGG_REGION_ORDER,
     AGG_REGIONS,
-    MODEL_REGIONMAPPING_CSV,
+    MODEL_REGIONMAPPING_CSVS,
     REGION_MAPPING,
     REGIONMAPPING_CSV,
-    SSP_CACHE_DIRS,
-    SSP_SOURCE_PICKLES,
-    SSP_UNRECONCILED_PICKLES,
+    figure_cache_dir,
+    source_pickle,
 )
 
 # Shading range shared across figure scripts (darkest -> lightest function shade).
@@ -236,10 +235,11 @@ def save_pickle(obj: object, path: Path):
         pickle.dump(obj, file_handle)
 
 
-def figure_cache_paths(ssp: str) -> dict[str, Path]:
+def figure_cache_paths(ssp: str, region_mapping: str = REGION_MAPPING) -> dict[str, Path]:
+    cache_dir = figure_cache_dir(ssp, region_mapping)
     return {
-        "reconciled": SSP_CACHE_DIRS[ssp] / "reconciled.pickle",
-        "unreconciled": SSP_CACHE_DIRS[ssp] / "unreconciled.pickle",
+        "reconciled": cache_dir / "reconciled.pickle",
+        "unreconciled": cache_dir / "unreconciled.pickle",
     }
 
 
@@ -264,19 +264,24 @@ def load_cached[T](
     return data
 
 
-def load_figure_data(ssp: str, force_refresh: bool = False) -> FigureData:
+def load_figure_data(
+    ssp: str, region_mapping: str = REGION_MAPPING, force_refresh: bool = False
+) -> FigureData:
     """Load the reconciled and unreconciled figure data of a scenario.
 
-    All arrays are on the level of the model regions (constants.REGION_MAPPING). Use `to_h12`
-    to aggregate extensive quantities to the H12 regions.
+    All arrays are on the level of the model regions (`region_mapping`). Use `to_h12` to
+    aggregate extensive quantities to the H12 regions.
     """
-    paths = figure_cache_paths(ssp)
+    paths = figure_cache_paths(ssp, region_mapping)
     return FigureData(
         reconciled=load_cached(
-            SSP_SOURCE_PICKLES[ssp], paths["reconciled"], extract_reconciled, force_refresh
+            source_pickle(ssp, True, region_mapping),
+            paths["reconciled"],
+            extract_reconciled,
+            force_refresh,
         ),
         unreconciled=load_cached(
-            SSP_UNRECONCILED_PICKLES[ssp],
+            source_pickle(ssp, False, region_mapping),
             paths["unreconciled"],
             extract_unreconciled,
             force_refresh,
@@ -285,9 +290,10 @@ def load_figure_data(ssp: str, force_refresh: bool = False) -> FigureData:
 
 
 @cache
-def model_to_h12_mapping() -> dict[str, str]:
-    """H12 region of each model region (constants.REGION_MAPPING)."""
-    model_regions = pd.read_csv(MODEL_REGIONMAPPING_CSV, sep=";").set_index("CountryCode")
+def model_to_h12_mapping(region_mapping: str = REGION_MAPPING) -> dict[str, str]:
+    """H12 region of each region of `region_mapping`."""
+    model_regions = pd.read_csv(MODEL_REGIONMAPPING_CSVS[region_mapping], sep=";")
+    model_regions = model_regions.set_index("CountryCode")
     h12_regions = pd.read_csv(REGIONMAPPING_CSV, sep=";").set_index("CountryCode")
     pairs = (
         pd.DataFrame({"model": model_regions["RegionCode"], "h12": h12_regions["RegionCode"]})
@@ -295,7 +301,7 @@ def model_to_h12_mapping() -> dict[str, str]:
         .drop_duplicates()
     )
     if not pairs["model"].is_unique:
-        raise ValueError(f"Region mapping {REGION_MAPPING} does not aggregate uniquely to H12.")
+        raise ValueError(f"Region mapping {region_mapping} does not aggregate uniquely to H12.")
     return dict(zip(pairs["model"], pairs["h12"]))
 
 
@@ -325,9 +331,9 @@ def aggregate_regions(array: fd.FlodymArray, mapping: dict[str, str]) -> fd.Flod
     return fd.FlodymArray(dims=fd.DimensionSet(dim_list=dims), values=values, name=array.name)
 
 
-def to_h12(array: fd.FlodymArray) -> fd.FlodymArray:
-    """Sum an extensive array of the model regions to the H12 regions."""
-    return aggregate_regions(array, model_to_h12_mapping())
+def to_h12(array: fd.FlodymArray, region_mapping: str = REGION_MAPPING) -> fd.FlodymArray:
+    """Sum an extensive array of the regions of `region_mapping` to the H12 regions."""
+    return aggregate_regions(array, model_to_h12_mapping(region_mapping))
 
 
 def shared_range(*value_arrays: np.ndarray, pad_frac: float = 0.05) -> list[float]:

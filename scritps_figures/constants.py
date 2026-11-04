@@ -219,18 +219,18 @@ MAIN_SCENARIO = "SSP2"
 RECONCILED_PREFIX = "figs"
 UNRECONCILED_PREFIX = "figs_unreconciled"
 
-SSP_PICKLENAMES = {
-    ssp: f"{RECONCILED_PREFIX}_cement_{ssp}_{REGION_MAPPING}/model.pickle" for ssp in SCENARIOS
-}
-SSP_UNRECONCILED_PICKLENAMES = {
-    ssp: f"{UNRECONCILED_PREFIX}_cement_{ssp}_{REGION_MAPPING}/model.pickle" for ssp in SCENARIOS
-}
-SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
-SSP_UNRECONCILED_PICKLES = {
-    ssp: PATH_CEMENT / name for ssp, name in SSP_UNRECONCILED_PICKLENAMES.items()
-}
-SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / REGION_MAPPING / ssp for ssp in SCENARIOS}
+def source_pickle(ssp: str, reconciled: bool = True, region_mapping: str = REGION_MAPPING) -> Path:
+    """Model pickle of a reconciled or unreconciled run (see generate_data.py)."""
+    prefix = RECONCILED_PREFIX if reconciled else UNRECONCILED_PREFIX
+    return PATH_CEMENT / f"{prefix}_cement_{ssp}_{region_mapping}" / "model.pickle"
 
+
+def figure_cache_dir(ssp: str, region_mapping: str = REGION_MAPPING) -> Path:
+    """Folder of the figure data extracted from the model runs of a scenario."""
+    return CACHE_DIR_CEMENT / region_mapping / ssp
+
+
+SSP_SOURCE_PICKLES = {ssp: source_pickle(ssp) for ssp in SCENARIOS}
 SOURCE_PICKLE = SSP_SOURCE_PICKLES[MAIN_SCENARIO]
 
 SSP_PALETTE = [
@@ -248,7 +248,7 @@ SSP_COLORS.update(
 )
 
 # Line-dash style per scenario: CE variants dashed, base SSPs solid.
-SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SSP_PICKLENAMES}
+SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SCENARIOS}
 
 # Legend labels (CE variants read as "SSPx (CE)").
-SSP_LABELS = {ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SSP_PICKLENAMES}
+SSP_LABELS = {ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SCENARIOS}
