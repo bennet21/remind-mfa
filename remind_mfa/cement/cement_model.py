@@ -1,58 +1,176 @@
 import logging
-from typing import Optional
-from copy import deepcopy
+from functools import cached_property
+from typing import TYPE_CHECKING
 import numpy as np
 import flodym as fd
 
 from remind_mfa.cement.cement_config import CementCfg
+from remind_mfa.cement.cement_bottom_up_definition import bottom_up_scenario_parameters
 from remind_mfa.cement.cement_definition import get_cement_definition
 from remind_mfa.cement.cement_mfa_system_bottom_up import (
-    StockDrivenBottomUpCementMFASystem,
+    StockDrivenBottomUpCementMFASystem as BU,
     expand_common_to_bu,
     extend_end_use_intensive,
 )
 from remind_mfa.common.assumptions_doc import add_assumption_doc
-from remind_mfa.common.data_blending import blend
-from remind_mfa.cement.cement_mfa_system_historic import InflowDrivenHistoricCementMFASystem
+from remind_mfa.common.data_blending import blend, blend_regional_with_global_mean
+from remind_mfa.cement.cement_mfa_system_historical import InflowDrivenHistoricalCementMFASystem
 from remind_mfa.cement.cement_mfa_system_future import StockDrivenCementMFASystem
-from remind_mfa.cement.cement_mappings import CementDimensionFiles, CementDisplayNames
+from remind_mfa.cement.cement_mappings import CementDisplayNames
 from remind_mfa.cement.cement_export import CementDataExporter
-from remind_mfa.cement.cement_visualization import CementVisualizer
 from remind_mfa.common.common_model import CommonModel
 from remind_mfa.cement.cement_definition import scenario_parameters as cement_scn_prm_def
 from remind_mfa.cement.cement_parameter_reconciliation import CementParameterReconciliation
 
+if TYPE_CHECKING:
+    from remind_mfa.cement.cement_visualization import CementVisualizer
 
-class CementModel(CommonModel):
+
+def converge_lifetime_factor(
+    lifetime_current: fd.Parameter,
+    lifetime_ref: fd.FlodymArray,
+    factor: fd.FlodymArray,
+    exponent: float,
+) -> fd.FlodymArray:
+    """Lifetime extension factor that lets lifetimes converge towards a reference lifetime.
+
+    The new lifetime is max(lifetime_current, factor * lifetime_ref - gap / factor ** exponent),
+    with gap = lifetime_ref - lifetime_current. A lifetime equal to the reference is extended by
+    `factor`, and the absolute gap of all other lifetimes to it shrinks by 1 / factor ** exponent.
+    For factor >= 1, the new lifetime increases monotonically with the current lifetime and is
+    never below it. A factor of 1 leaves lifetimes unchanged.
+    Plain english: lifetimes below reference receive a larger multiplier than factor,
+    lifetimes above reference a smaller one until they just remain at their value.
+
+    Args:
+        lifetime_current (fd.Parameter): Current lifetime.
+        lifetime_ref (fd.FlodymArray): Reference lifetime to converge towards.
+        factor (fd.FlodymArray): Lifetime extension factor at the reference lifetime. Its
+            dimensions must contain those of `lifetime_current` and `lifetime_ref`.
+        exponent (float): Exponent n of the gap shrinkage 1 / factor ** n.
+
+    Returns:
+        fd.Parameter: Ratio of the new to the current lifetime, with the dimensions of `factor`.
+    """
+    lifetime_current = lifetime_current.cast_to(factor.dims)
+    lifetime_ref = lifetime_ref.cast_to(factor.dims)
+    lifetime_new = factor * lifetime_ref - (lifetime_ref - lifetime_current) / factor**exponent
+    lifetime_factor = lifetime_new.maximum(lifetime_current) / lifetime_current
+    return lifetime_factor.to_class(fd.Parameter)
+
+
+def apply_min_share(split: fd.Parameter, dim_letter: str, min_share: float) -> fd.Parameter:
+    """Raise all shares of a split to at least `min_share` and renormalize them to sum to one.
+
+    Args:
+        split: Split over the dimension `dim_letter`, summing to one.
+        dim_letter: Letter of the split dimension.
+        min_share: Minimum share before renormalization.
+
+    Returns:
+        Split without shares below `min_share` (up to renormalization), summing to one.
+    """
+    adjusted_split = fd.Parameter(dims=split.dims, name=split.name)
+    adjusted_split[...] = split.maximum(min_share).get_shares_over((dim_letter,))
+    return adjusted_split
+
+
+def replace_unspecified_structure_split(
+    structure_split: fd.Parameter,
+    weights: fd.FlodymArray,
+    unspecified: str = "Unspecified Structure",
+) -> fd.Parameter:
+    """Replace the structure split where only the unspecified structure type is known by the
+    weighted global mean of the regions with known structure types.
+
+    Args:
+        structure_split: Split over structures (s), with dimensions (r, b, s).
+        weights: Weights of the regional splits in the global mean, with dimensions (r, b).
+        unspecified: Item of the structure dimension without information on the structure.
+
+    Returns:
+        Structure split in which no region and building type has only unspecified structures.
+    """
+    only_unspecified = structure_split[{"s": unspecified}].apply(
+        lambda x: (x > 1.0 - 1e-9).astype(float)
+    )
+    known_weights = weights * (1.0 - only_unspecified)
+    global_mean = (structure_split * known_weights).sum_over("r") / known_weights.sum_over(
+        "r"
+    ).maximum(1e-12)
+
+    adjusted_split = fd.Parameter(dims=structure_split.dims, name=structure_split.name)
+    adjusted_split[...] = structure_split * (1.0 - only_unspecified) + (
+        global_mean * only_unspecified
+    ).cast_to(structure_split.dims)
+    return adjusted_split
+
+
+class CementModel(CommonModel[CementCfg]):
 
     ConfigCls = CementCfg
-    DimensionFilesCls = CementDimensionFiles
     DataExporterCls = CementDataExporter
-    VisualizerCls = CementVisualizer
     DisplayNamesCls = CementDisplayNames
-    HistoricMFASystemCls = InflowDrivenHistoricCementMFASystem
+    HistoricalMFASystemCls = InflowDrivenHistoricalCementMFASystem
     FutureMFASystemCls = StockDrivenCementMFASystem
-    BottomUpMFASystemCls = StockDrivenBottomUpCementMFASystem
+    BottomUpMFASystemCls = BU
     custom_scn_prm_def = cement_scn_prm_def
     get_definition = staticmethod(get_cement_definition)
 
-    # TODO: unify, then delete
-    historic_stock_name: str = "in_use"
+    @cached_property
+    def visualizer(self) -> CementVisualizer:
+        from remind_mfa.cement.cement_visualization import CementVisualizer
+
+        return CementVisualizer(cfg=self.cfg.visualization, display_names=self.display_names)
+
+    @property
+    def bottom_up_active(self) -> bool:
+        """Whether the bottom-up module is active, which is only used for parameter reconciliation."""
+        return self.cfg.model_switches.parameter_reconciliation
+
+    def get_scenario_parameter_definitions(self) -> list:
+        definitions = super().get_scenario_parameter_definitions()
+        if self.bottom_up_active:
+            definitions = definitions + bottom_up_scenario_parameters
+        return definitions
+
+    def get_inactive_scenario_parameter_names(self) -> set[str]:
+        if self.bottom_up_active:
+            return set()
+        return {definition.name for definition in bottom_up_scenario_parameters}
 
     def modify_parameters(self):
-        # construct lifetime std from mean and relative std
-        lifetime_std = fd.Parameter(dims=self.parameters["lifetime_mean"].dims)
-        lifetime_std[...] = self.parameters["lifetime_mean"] * self.parameters["lifetime_rel_std"]
-        self.parameters["lifetime_std"] = lifetime_std
+        self.set_hibernation_share(0.3)
 
         # development weight for gdp-dependent parameters/scenarios
         self.parameters["development_weight"] = self.calc_development_weight()
 
+        if self.bottom_up_active:
+            self.correct_bottom_up_input_data()
+
+    def correct_bottom_up_input_data(self):
+        """Quick fixes of bottom-up input data with zero concrete stock in single regions.
+
+        TODO: move to mrmfa (calcCeResidentialTypeSplit, calcCeStructureSplit).
+        """
+        prm = self.parameters
+
+        # residential types with zero share (e.g. no multi-family homes in CRI)
+        prm["residential_type_split"] = apply_min_share(
+            prm["residential_type_split"], dim_letter="d", min_share=0.01
+        )
+
+        # building types with only unspecified structures (zero concrete intensity, e.g. SGP
+        # single-family homes): use the global mean of the regions with known structures
+        floorspace = BU.calc_gross_floorspace(prm)[{"t": self.dims["h"].items[-1]}]
+        prm["structure_split"] = replace_unspecified_structure_split(
+            prm["structure_split"], weights=expand_common_to_bu(floorspace, prm)
+        )
+
     def calc_development_weight(self) -> fd.Parameter:
-        """Development weight per region from GDP per capita at the last historic year:
+        """Development weight per region from GDP per capita at the last historical year:
         Blends log(GDP per capita) from 1 at low GDP to 0 at high GDP, with the transition range
         defined by the scenario parameters `development_gdppc_low` and `development_gdppc_high`."""
-        # TODO this could be merged with steel's approach
         gdppc = self.parameters["gdppc"][{"t": self.dims["h"].items[-1]}]
         weight = fd.Parameter(dims=gdppc.dims, name="development_weight")
         weight[...] = blend(
@@ -66,46 +184,86 @@ class CementModel(CommonModel):
         )
         return weight
 
-    def calculate_weighted_mean(
+    def set_structure_share(
         self,
-        regional_parameter: fd.Parameter,
-        global_weights: fd.FlodymArray,
-        output_name: str,
+        structure_split: fd.Parameter,
+        structure: str,
+        new_share: fd.FlodymArray | float,
     ) -> fd.Parameter:
-        """Calculate a global weighted mean, then blend it with regional values.
+        """Set the share of one structure type and rescale the others proportionally.
 
-        The development weight controls the blend: a weight of one selects the
-        global weighted mean, while a weight of zero preserves the regional value.
+        Args:
+            structure_split: Split over the structure dimension, summing to one.
+            structure: Item of the structure dimension whose share is set.
+            new_share: New share of `structure`.
+
+        Returns:
+            Structure split with the new share, still summing to one.
         """
-        global_weighted_mean = (regional_parameter * global_weights).sum_over(
-            "r"
-        ) / global_weights.sum_over("r")
-        development_blended_mean = fd.Parameter(
-            dims=regional_parameter.dims, name=output_name
-        )
-        development_blended_mean[...] = (
-            self.parameters["development_weight"] * global_weighted_mean
-            + (1.0 - self.parameters["development_weight"]) * regional_parameter
-        )
-        return development_blended_mean
+        old_share = structure_split[{"s": structure}]
+        # scaling of the other shares, which absorb the change of the set share
+        others_scaling = (1.0 - new_share) / (1.0 - old_share).maximum(1e-9)
 
-    def apply_timber_floor(self, structure_split: fd.Parameter) -> fd.Parameter:
-        """Raise the timber share of a structure split to the scenario minimum.
+        adjusted_split = fd.Parameter(dims=structure_split.dims, name=structure_split.name)
+        adjusted_split[...] = structure_split * others_scaling
+        adjusted_split[{"s": structure}] = new_share
+        return adjusted_split
 
-        Shares already at or above `min_timber_share` are left untouched. The share gained
-        by timber is taken from all other structure types in proportion to their size, so
-        the split still sums to one.
-        """
-        timber = structure_split[{"s": "T"}]
+    def calculate_derived_parameters(self):
+
+        # copy/rename for use in common model
+        self.parameters["end_use_split_limit"] = self.parameters["end_use_split"]
+
+        # construct lifetime std from (reconciled) mean and relative std
+        lifetime_std = fd.Parameter(dims=self.parameters["lifetime_mean"].dims, name="lifetime_std")
+        lifetime_std[...] = self.parameters["lifetime_mean"] * self.parameters["lifetime_rel_std"]
+        self.parameters["lifetime_std"] = lifetime_std
+
+        if self.bottom_up_active:
+            self.calculate_bottom_up_scenario_parameters()
+
+    def calculate_bottom_up_scenario_parameters(self):
+
+        # derive mean residential type and structure splits from global weighted average
+        prm = self.parameters
+        floorspace = BU.calc_gross_floorspace(prm)[{"t": self.dims["h"].items[-1]}]
+
+        # residential type split target
+        res_floorspace = floorspace[{"c": "Residential"}]
+        prm["residential_type_split_mean"] = blend_regional_with_global_mean(
+            regional_values=prm["residential_type_split"],
+            mean_weights=res_floorspace,
+            global_share=prm["development_weight"],
+            name="residential_type_split_mean",
+        )
+
+        # structure split target: global weighted mean without unknown structures,
+        # with a floor on the timber share
+        bu_floorspace = expand_common_to_bu(floorspace, prm)
+        structure_split_mean = blend_regional_with_global_mean(
+            regional_values=prm["structure_split"],
+            mean_weights=bu_floorspace,
+            global_share=prm["development_weight"],
+            name="structure_split_mean",
+        )
+        prm["structure_split_mean"] = self.set_structure_share(
+            structure_split_mean, "Unspecified Structure", 0.0
+        )
+        add_assumption_doc(
+            type="model switch",
+            name="No unknown structure type in target",
+            value="0",
+            description=(
+                "The structure split converges to a target without the unknown structure type. "
+                "Its share is redistributed to the other structure types proportionally."
+            ),
+        )
+
+        timber = prm["structure_split_mean"][{"s": "Timber Structure"}]
         floor = self.scenario_parameters["min_timber_share"].cast_to(timber.dims)
-        new_timber = timber.maximum(floor)
-        # scaling of the non-timber shares, which have to make room for the added timber
-        others_scaling = (1.0 - new_timber) / (1.0 - timber).maximum(1e-9)
-
-        target = fd.Parameter(dims=structure_split.dims, name="structure_split_target")
-        target[...] = structure_split * others_scaling
-        target[{"s": "T"}] = new_timber
-
+        prm["structure_split_target"] = self.set_structure_share(
+            prm["structure_split_mean"], "Timber Structure", timber.maximum(floor)
+        )
         add_assumption_doc(
             type="model switch",
             name="Minimum timber share of buildings",
@@ -116,90 +274,82 @@ class CementModel(CommonModel):
                 "added timber share is taken from the other structure types proportionally."
             ),
         )
-        return target
 
-    def calculate_derived_parameters(self):
+    def get_lifetime_factor_cohort(self) -> fd.Parameter:
+        """Lifetime extension factor by age-cohort (nature), derived from the scenario parameter
+        `lifetime_factor_nature`.
 
-        # copy/rename for use in common model
-        self.parameters["sector_split_limit"] = self.parameters["end_use_split"]
+        Lifetimes of new age-cohorts converge to the GDP-weighted regional mean lifetime of the
+        last historical year (see `converge_lifetime_factor`).
+        """
+        lifetime_convergence_exponent = 3
+        factor = self.parameters["lifetime_factor_nature"]
+        last_historical = {"t": self.dims["h"].items[-1]}
 
-        # derive mean dwelling and structure splits from global weighted average
-        prm = self.parameters
-        floorspace = prm["floorspace"][{"t": self.dims["h"].items[-1]}]
-
-        # dwelling split target
-        res_floorspace = floorspace[{"c": "Res"}]
-        prm["dwelling_split_mean"] = self.calculate_weighted_mean(
-            prm["dwelling_split"], res_floorspace, "dwelling_split_mean"
+        # calculate gdp-weighted global lifetime average
+        lifetime_current = self.parameters["lifetime_mean"][last_historical]
+        gdp = (
+            self.parameters["gdppc"][last_historical]
+            * self.parameters["population"][last_historical]
         )
+        lifetime_ref = (lifetime_current * gdp).sum_over("r") / gdp.sum_over("r")
 
-        # structure split target: global weighted mean, with a floor on the timber share
-        bu_floorspace = expand_common_to_bu(floorspace, prm)
-        prm["structure_split_mean"] = self.calculate_weighted_mean(
-            prm["structure_split"], bu_floorspace, "structure_split_mean"
+        add_assumption_doc(
+            type="model switch",
+            name="Lifetime convergence of new age-cohorts",
+            value=lifetime_convergence_exponent,
+            description=(
+                "New age-cohorts (nature) of a region at the GDP-weighted regional mean lifetime "
+                "of the last historical year are extended by 'lifetime_factor_nature'. The gap of "
+                "other regions to this reference lifetime shrinks by the factor "
+                "1 / lifetime_factor_nature ** n, with n = 3. Lifetimes are never reduced."
+            ),
         )
-        prm["structure_split_target"] = self.apply_timber_floor(prm["structure_split_mean"])
-
-        # MI: close the gap between p50 and p25 MI by a factor
-        # TODO add p25 as lower_mi in mrmfa
-        lower_mi = prm["concrete_building_mi"] * 0.8
-        prm["concrete_building_mi_target"] = (
-            prm["concrete_building_mi"]
-            + self.scenario_parameters["concrete_building_mi_target_factor"]
-            * (lower_mi - prm["concrete_building_mi"])
-        ).to_class(fd.Parameter)
-
-        # Lifetime
-        # TODO move lifetime_max to mrmfa
-        lifetime_max = fd.FlodymArray(dims=self.dims["u",])
-        lifetime_max["Res"] = 100
-        lifetime_max["Com"] = 80
-        lifetime_max["Ind"] = 75
-        lifetime_max["Civ"] = 75
-        lifetime_current = self.parameters["lifetime_mean"][{"h": self.dims["h"].items[-1]}]
-        multiplier = (1 / lifetime_current * lifetime_max - 1).maximum(0)
-
-        alpha = self.scenario_parameters["lifetime_min_factor"]
-        prm["lifetime_mean_factor"] = (alpha + (alpha - 1) * multiplier).to_class(fd.Parameter)
-        prm["lifetime_std_factor"] = prm["lifetime_mean_factor"]
+        return converge_lifetime_factor(
+            lifetime_current, lifetime_ref, factor, lifetime_convergence_exponent
+        )
 
     def run(self):
-        super().run()
+        reconcile = self.cfg.model_switches.parameter_reconciliation
+        super().run(future=not reconcile)
 
-        if self.cfg.model_switches.parameter_reconciliation.do_reconcile:
-            return self.run_with_reconciliation()
+        if reconcile:
+            self.run_with_reconciliation()
 
-    def make_bottom_up_mfa(self) -> StockDrivenBottomUpCementMFASystem:
+    def make_bottom_up_mfa(self) -> BU:
         """Construct the future bottom-up MFA.
 
-        Lifetime parameter is broadcasted to extended-end-use dimension for bottom-up MFA.
+        Intensive end-use-resolved parameters (`intensive_end_use_prms`) are broadcasted to the
+        extended-end-use dimension for the bottom-up MFA.
         """
+        intensive_end_use_prms = (
+            "lifetime_mean",
+            "lifetime_std",
+            "lifetime_factor_nurture",
+            "lifetime_factor_cohort",
+        )
         bu_mfa = self.make_mfa(
-            definition=self.get_definition(self.cfg, historic=False, bottom_up=True),
+            definition=self.get_definition(self.cfg, historical=False, bottom_up=True),
             mfasystem_class=self.BottomUpMFASystemCls,
         )
         bu_mfa.parameters = {
             **bu_mfa.parameters,
-            "lifetime_mean": extend_end_use_intensive(
-                self.parameters["lifetime_mean"], self.dims["e"]
-            ),
-            "lifetime_std": extend_end_use_intensive(
-                self.parameters["lifetime_std"], self.dims["e"]
-            ),
+            **{
+                name: extend_end_use_intensive(self.parameters[name], self.dims["e"])
+                for name in intensive_end_use_prms
+            },
         }
         return bu_mfa
 
     def run_with_reconciliation(self):
         """Run the full reconciled model pipeline, producing both top-down and bottom-up MFAs.
 
-        Called by `run()` when `do_reconcile` is enabled. Extends the base model run with a
-        parameter reconciliation loop that aligns historic top-down and bottom-up stocks, then
-        propagates reconciled parameters into the future projection.
+        Called by `run()` when `parameter_reconciliation` is enabled, after the base run has
+        computed the historical MFA only. Runs a parameter reconciliation loop that aligns
+        historical top-down and bottom-up stocks, then propagates reconciled parameters into the
+        future projection.
 
         Saves the full set of MFAs as attributes:
-        - `td_hist_mfa`: Original historical top-down MFA (pre-reconciliation) as calculated in super.run().
-        - `td_mfa`: Original future top-down MFA (pre-reconciliation) as calculated in super.run().
-        - `bu_mfa`: Future bottom-up MFA calculated from original parameters and zero trade (pre-reconciliation).
         - `td_hist_mfa_reconciled`: Reconciled historical top-down MFA.
         - `td_mfa_reconciled`: Reconciled future top-down MFA.
         - `bu_mfa_reconciled`: Reconciled future bottom-up MFA.
@@ -207,38 +357,24 @@ class CementModel(CommonModel):
 
         """
 
-        # collect non-reconciled mfas
-        self.td_hist_mfa = self.historic_mfa
-        self.td_mfa = self.future_mfa
-
-        # TODO zero trade was a cheat to use top-down mfa system for bottom-up - not done currently
-        # zero_trade = self._create_zero_trade(self.td_hist_mfa.trade_set)
-
-        # TODO: once we can initialize stock vintage in flodym, we can provide them to bu stock.
-        # Then, we can set up a whole the bottom-up MFA system - and compare bu vs td demands.
-        # For now, we simply compute non-reconiled bottom-up stock for analysis.
-        bu_mfa = self.make_bottom_up_mfa()
-        bu_mfa.compute_floorspace_stock()
-        self.bu_stock = bu_mfa.compute_bottom_up_stock()
-
         # reconcile parameters, then re-derive dependent parameters from the result
-        self.parameters = self.historic_parameters
+        self.parameters = self.historical_parameters
         self.reconcile_parameters()
         self.calculate_derived_parameters()
 
-        # compute reconciled historic top-down mfa
-        self.td_hist_mfa_reconciled = self.make_mfa(historic=True)
+        # compute reconciled historical top-down mfa
+        self.td_hist_mfa_reconciled = self.make_mfa(historical=True)
         self.td_hist_mfa_reconciled.compute()
 
-        # save reconciled top-down historic mfa for reconciled stock extrapolation
-        self.historic_mfa = self.td_hist_mfa_reconciled
+        # save reconciled top-down historical mfa for reconciled stock extrapolation
+        self.historical_mfa = self.td_hist_mfa_reconciled
 
         # apply scenarios to parameters for future mfa (as in common model)
         self.extrapolate_parameters()
 
         # compute reconciled future top-down mfa
-        self.td_stock_reconciled = self.get_long_term_stock()  # cement stock
-        self.td_mfa_reconciled = self.make_mfa(historic=False)
+        self.td_stock_reconciled = self.get_long_term_stock()
+        self.td_mfa_reconciled = self.make_mfa(historical=False)
         self.td_mfa_reconciled.compute(
             self.td_stock_reconciled, self.td_hist_mfa_reconciled.trade_set
         )
@@ -246,7 +382,7 @@ class CementModel(CommonModel):
         # compute reconciled future bottom-up mfa
         self.bu_mfa_reconciled = self.make_bottom_up_mfa()
         self.bu_mfa_reconciled.compute(
-            self.td_mfa_reconciled.stocks["in_use"], self.td_hist_mfa_reconciled.trade_set
+            self.td_mfa_reconciled.stocks["use"], self.td_hist_mfa_reconciled.trade_set
         )
 
         # overwrite future_mfa with update
@@ -254,22 +390,26 @@ class CementModel(CommonModel):
 
     def reconcile_parameters(
         self,
-        max_iter: int = 5,
-        tol: Optional[float] = 1e-3,
+        max_iter: int = 50,
+        tol_r: float = 1e-3,
+        tol_step: float = 5e-2,
     ):
         """Reconcile parameters between top-down and bottom-up stocks.
 
         Args:
             max_iter: Maximum number of correction iterations.
-            tol: Convergence tolerance; stop early when max |log(td/bu)| < tol.
-                 If None, always run max_iter iterations.
+            tol_r: Convergence tolerance of the mismatch max |log(td/bu)|.
+            tol_step: Convergence tolerance of the largest log-step of the corrections.
         """
-        logging.info(f"Starting parameter reconciliation (max_iter={max_iter}, tol={tol})...")
+        logging.info(
+            f"Starting parameter reconciliation (max_iter={max_iter}, tol_r={tol_r}, "
+            f"tol_step={tol_step})..."
+        )
 
-        ref_mfa = self.make_mfa(historic=True)
+        ref_mfa = self.make_mfa(historical=True)
         ref_mfa.trade_set = (
-            self.historic_mfa.trade_set
-        )  # trade is not altered during reconciliation, so we can just take it from the already computed historic MFA
+            self.historical_mfa.trade_set
+        )  # trade is not altered during reconciliation, so we can just take it from the already computed historical MFA
 
         self.parameter_reconciliation = CementParameterReconciliation(
             ref_mfa=ref_mfa,
@@ -277,16 +417,6 @@ class CementModel(CommonModel):
         )
         self.parameters = self.parameter_reconciliation.correct_parameters(
             max_iter=max_iter,
-            tol=tol,
+            tol_r=tol_r,
+            tol_step=tol_step,
         )
-
-    def _create_zero_trade(self, trade_ref):
-        zero_trade = deepcopy(trade_ref)
-        for market in trade_ref.markets.keys():
-            zero_trade[market].imports = fd.FlodymArray.full_like(
-                trade_ref[market].imports, fill_value=0
-            )
-            zero_trade[market].exports = fd.FlodymArray.full_like(
-                trade_ref[market].exports, fill_value=0
-            )
-        return zero_trade

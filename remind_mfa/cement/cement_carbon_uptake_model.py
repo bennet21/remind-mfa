@@ -4,6 +4,89 @@ import flodym as fd
 from pydantic import BaseModel, Field, model_validator
 
 from remind_mfa.common.assumptions_doc import add_assumption_doc
+from remind_mfa.common.common_definition import RemindMFAParameterDefinition
+from remind_mfa.common.common_definition import RemindMFAPartialDefinition
+
+# fmt: off
+
+def get_carbonation_definition() -> RemindMFAPartialDefinition:
+    """Definition part of the carbonation module, added to the future cement MFA if
+    carbonation is active."""
+
+    dimensions = [
+        fd.DimensionDefinition(name="Product Application", dim_letter="a", dtype=str),
+        fd.DimensionDefinition(name="Waste Type", dim_letter="w", dtype=str),
+        fd.DimensionDefinition(name="Waste Size", dim_letter="p", dtype=str),
+        fd.DimensionDefinition(name="Carbonation Location", dim_letter="l", dtype=str),
+    ]
+
+    processes = ["atmosphere", "carbonation"]
+
+    flows = [
+        fd.FlowDefinition(from_process="clinker_production", to_process="atmosphere", dim_letters=("t", "r")),
+        fd.FlowDefinition(from_process="atmosphere", to_process="carbonation", dim_letters=("t", "r", "l")),
+    ]
+
+    stocks = [
+        fd.StockDefinition(
+            name="atmosphere",
+            process="atmosphere",
+            dim_letters=("t", "r"),
+            subclass=fd.SimpleFlowDrivenStock,
+        ),
+        fd.StockDefinition(
+            name="carbonated_co2",
+            process="carbonation",
+            dim_letters=("t", "r", "l"),
+            subclass=fd.InflowDrivenDSM,
+            lifetime_model_class=fd.FixedLifetime,
+        ),
+    ]
+
+    parameters = [
+        RemindMFAParameterDefinition(name="clinker_cao_ratio", dim_letters=(),
+                                     description="Mass fraction of CaO contained in clinker."),
+        RemindMFAParameterDefinition(name="cao_carbonation_share", dim_letters=("m",),
+                                     description="Share of CaO that is available for carbonation per construction material."),
+        RemindMFAParameterDefinition(name="cao_emission_factor", dim_letters=(),
+                                     description="Process CO2 emission factor from producing CaO."),
+        RemindMFAParameterDefinition(name="ckd_cao_ratio", dim_letters=(),
+                                     description="CaO content ratio present in cement kiln dust."),
+        RemindMFAParameterDefinition(name="ckd_landfill_share", dim_letters=(),
+                                     description="Share of cement kiln dust disposed to landfill."),
+        RemindMFAParameterDefinition(name="carbonation_rate", dim_letters=("r", "a"),
+                                     description="Carbonation rate for exposed stocks by region and application."),
+        RemindMFAParameterDefinition(name="carbonation_rate_buried", dim_letters=("r", "a"),
+                                     description="Carbonation rate for buried stocks by region and application."),
+        RemindMFAParameterDefinition(name="carbonation_rate_coating", dim_letters=(),
+                                     description="Carbonation rate modifier factoring in coated cement products."),
+        RemindMFAParameterDefinition(name="carbonation_rate_co2", dim_letters=(),
+                                     description="Carbonation rate modifier factoring in increased atmospheric CO2 concentrations."),
+        RemindMFAParameterDefinition(name="carbonation_rate_additives", dim_letters=(),
+                                     description="Carbonation rate modifier factoring in cement additives."),
+        RemindMFAParameterDefinition(name="product_thickness", dim_letters=("a",),
+                                     description="Average thickness assumed for each product application."),
+        RemindMFAParameterDefinition(name="material_application_split", dim_letters=("r", "m", "a"),
+                                     description="Share of each construction material distributed across product applications, by region."),
+        RemindMFAParameterDefinition(name="waste_type_split", dim_letters=("r", "w"),
+                                     description="Share of end-of-life cement flows by waste type and region."),
+        RemindMFAParameterDefinition(name="waste_size_share", dim_letters=("r", "w", "p"),
+                                     description="Share of waste distributed across size classes per region and type."),
+        RemindMFAParameterDefinition(name="waste_size_min", dim_letters=("w", "p"),
+                                     description="Minimum particle size represented for each waste type and class."),
+        RemindMFAParameterDefinition(name="waste_size_max", dim_letters=("w", "p"),
+                                     description="Maximum particle size represented for each waste type and class."),
+    ]
+
+    return RemindMFAPartialDefinition(
+        dimensions=dimensions,
+        processes=processes,
+        flows=flows,
+        stocks=stocks,
+        parameters=parameters,
+    )
+
+# fmt: on
 
 
 class CementCarbonUptakeModel(BaseModel):
@@ -20,23 +103,21 @@ class CementCarbonUptakeModel(BaseModel):
         return self
 
     def compute_carbon_flow(self):
-        self.build_subsystem()
-
         flw = self.flows
         stk = self.stocks
         prm = self.parameters
 
         # emissions (process only)
-        flw["prod_clinker => atmosphere"][...] = (
-            flw["prod_clinker => market_clinker"] * prm["clinker_cao_ratio"]  # clinker
-            + flw["prod_clinker => sysenv"] * prm["ckd_cao_ratio"]  # CKD
+        flw["clinker_production => atmosphere"][...] = (
+            flw["clinker_production => clinker_market"] * prm["clinker_cao_ratio"]  # clinker
+            + flw["clinker_production => losses"] * prm["ckd_cao_ratio"]  # CKD
         ) * prm["cao_emission_factor"]
-        stk["atmosphere"].inflow = flw["prod_clinker => atmosphere"]
+        stk["atmosphere"].inflow = flw["clinker_production => atmosphere"]
         # overwrite previous sysenv clinker flow to include emissions
-        flw["sysenv => prod_clinker"][...] = (
-            flw["prod_clinker => market_clinker"]
-            + flw["prod_clinker => atmosphere"]
-            + flw["prod_clinker => sysenv"]
+        flw["sysenv => clinker_production"][...] = (
+            flw["clinker_production => clinker_market"]
+            + flw["clinker_production => atmosphere"]
+            + flw["clinker_production => losses"]
         )
 
         # carbonation
@@ -49,81 +130,6 @@ class CementCarbonUptakeModel(BaseModel):
         stk["atmosphere"].outflow[...] = stk["carbonated_co2"].inflow
         stk["atmosphere"].compute()
 
-    def build_subsystem(self):
-        """Create the carbonation subsystem on the MFA and reroute the in-use outflow through it.
-
-        The base cement definition doesn't include eol stocks (hence ``use => sysenv``).
-        This method injects the processes, stocks, and flows the carbonation model needs, so the
-        memory-heavy ``eol`` cohort arrays (and the ``atmosphere``/``carbonated_co2`` stocks) are
-        allocated only when carbonation is active.
-        """
-        mfa = self.mfa
-        in_use_letters = mfa.stocks["in_use"].dims.letters
-
-        # processes (ids continue after the ones already defined)
-        next_id = max(process.id for process in mfa.processes.values()) + 1
-        for name in ("eol", "atmosphere", "carbonation"):
-            mfa.processes[name] = fd.Process(name=name, id=next_id)
-            next_id += 1
-
-        # stocks
-        stock_definitions = [
-            fd.StockDefinition(
-                name="eol",
-                process="eol",
-                dim_letters=in_use_letters,
-                subclass=fd.InflowDrivenDSM,
-                lifetime_model_class=fd.FixedLifetime,
-            ),
-            fd.StockDefinition(
-                name="atmosphere",
-                process="atmosphere",
-                dim_letters=("t", "r"),
-                subclass=fd.SimpleFlowDrivenStock,
-            ),
-            fd.StockDefinition(
-                name="carbonated_co2",
-                process="carbonation",
-                dim_letters=("t", "r", "l"),
-                subclass=fd.InflowDrivenDSM,
-                lifetime_model_class=fd.FixedLifetime,
-            ),
-        ]
-        mfa.stocks.update(
-            fd.make_empty_stocks(
-                stock_definitions=stock_definitions, processes=mfa.processes, dims=mfa.dims
-            )
-        )
-
-        # flows
-        flow_definitions = [
-            fd.FlowDefinition(from_process="use", to_process="eol", dim_letters=in_use_letters),
-            fd.FlowDefinition(from_process="eol", to_process="sysenv", dim_letters=in_use_letters),
-            fd.FlowDefinition(
-                from_process="prod_clinker", to_process="atmosphere", dim_letters=("t", "r")
-            ),
-            fd.FlowDefinition(
-                from_process="atmosphere", to_process="carbonation", dim_letters=("t", "r", "l")
-            ),
-        ]
-        mfa.flows.update(
-            fd.make_empty_flows(
-                processes=mfa.processes, flow_definitions=flow_definitions, dims=mfa.dims
-            )
-        )
-
-        # reroute the in-use outflow: use => sysenv (baseline sink) becomes use => eol => sysenv
-        del mfa.flows["use => sysenv"]
-        mfa.flows["use => eol"][...] = mfa.stocks["in_use"].outflow
-        mfa.stocks["eol"].inflow[...] = mfa.flows["use => eol"]
-        mfa.stocks["eol"].lifetime_model.set_prms(mean=np.inf)
-        mfa.stocks["eol"].compute()
-        mfa.flows["eol => sysenv"][...] = mfa.stocks["eol"].outflow
-
-        # refresh cached references so the rest of the model sees the injected entries
-        self.flows = mfa.flows
-        self.stocks = mfa.stocks
-
     def calc_carbonation(self) -> fd.FlodymArray:
         # get parameters for calculation
         f = self.get_available_cao()
@@ -134,7 +140,7 @@ class CementCarbonUptakeModel(BaseModel):
         uptake = fd.FlodymArray(dims=self.stocks["carbonated_co2"].dims)
         uptake["CKD"] = self.uptake_CKD()
         uptake["Construction Waste"] = self.uptake_construction_waste()
-        uptake["In-Use Stock"] = self.uptake_in_use(f_in=f, k_free_in=k_free)
+        uptake["In-Use Stock"] = self.uptake_use(f_in=f, k_free_in=k_free)
         uptake["End-of-Life Stock"] = self.uptake_eol(
             f_in=f, k_free_in=k_free, k_buried_in=k_buried
         )
@@ -153,7 +159,7 @@ class CementCarbonUptakeModel(BaseModel):
         )
 
         prm = self.parameters
-        ckd_prod = self.flows["prod_clinker => sysenv"]
+        ckd_prod = self.flows["clinker_production => losses"]
         uptake = (
             ckd_prod * prm["ckd_landfill_share"] * prm["ckd_cao_ratio"] * prm["cao_emission_factor"]
         )
@@ -171,7 +177,7 @@ class CementCarbonUptakeModel(BaseModel):
         )
 
         prm = self.parameters
-        cwaste_prod = self.flows["market_cement => sysenv"]
+        cwaste_prod = self.flows["construction => losses"]
 
         # calculate uptake in one year
         annual_carbonation_fraction = 0.2
@@ -191,7 +197,7 @@ class CementCarbonUptakeModel(BaseModel):
 
         return uptake_five_years
 
-    def uptake_in_use(self, f_in: fd.FlodymArray, k_free_in: fd.FlodymArray) -> fd.FlodymArray:
+    def uptake_use(self, f_in: fd.FlodymArray, k_free_in: fd.FlodymArray) -> fd.FlodymArray:
         """
         Uptake of CO2 by the in-use stock.
         Product mass is assumed to be distributed over thickness, leaving a free surface for carbonation.
@@ -207,9 +213,32 @@ class CementCarbonUptakeModel(BaseModel):
             ),
         )
 
-        stk = self.stocks["in_use"]
+        add_assumption_doc(
+            type="model assumption",
+            name="In-use carbonation of reused products",
+            description=(
+                "Reused products are assumed not to carbonate further during their second life,"
+                " as their surface is already mostly carbonated from the first life."
+            ),
+        )
+
+        add_assumption_doc(
+            type="model assumption",
+            name="No carbonation of hibernating stock",
+            description=(
+                "Products in the hibernating stock (no longer used, but not demolished) are"
+                " assumed not to carbonate further. This underestimates total uptake."
+            ),
+        )
+
+        stk = self.stocks["use"]
         stk_dims = stk.dims.drop("k")
-        cement_k_idx = list(stk.dims["k"].items).index("cement")
+        cement_k_idx = list(stk.dims["k"].items).index("Cement")
+
+        # share of each cohort's inflow that is newly produced (not reused)
+        new_share = safe_share(
+            self.flows["construction => use"][{"k": "Cement"}], stk.inflow[{"k": "Cement"}]
+        )
 
         # create age dimension
         ages = [i for i in range(stk._n_t)][::-1]
@@ -258,6 +287,7 @@ class CementCarbonUptakeModel(BaseModel):
             # get age cohort of cement mass at time t
             _, mass_values = get_age_distribution(stk, t)
             mass_values = mass_values[..., cement_k_idx]  # select cement constituent only
+            mass_values = mass_values * new_share[: t + 1]  # exclude reused mass (cohorts 0..t)
             mass_dims = sliced_agedimset.union_with(stk_dims).drop("t")
             mass = fd.FlodymArray(dims=mass_dims, values=mass_values)
             # expand mass over carbonation applications
@@ -338,11 +368,11 @@ class CementCarbonUptakeModel(BaseModel):
         )
 
         prm = self.parameters
-        stk_in_use = self.stocks["in_use"]
-        eol_dims = self.stocks["eol"].dims
-        stk_dims_no_k = stk_in_use.dims.drop("k")
-        eol_dims_no_k = eol_dims.drop("k")
-        cement_k_idx = list(stk_in_use.dims["k"].items).index("cement")
+        stk_use = self.stocks["use"]
+        stk_dims_no_k = stk_use.dims.drop("k")
+        # EOL carbonation is computed at reduced resolution to limit the size of the age-resolved arrays
+        eol_dims_no_k = stk_use.dims["t", "r", "m"]
+        cement_k_idx = list(stk_use.dims["k"].items).index("Cement")
         # use application-weighted averages for EOL (EOL stock has no application dimension)
         k_free_in_mean = self._application_weighted_average(k_free_in)  # (r, m)
         thickness_mean = self._application_weighted_average(
@@ -353,10 +383,10 @@ class CementCarbonUptakeModel(BaseModel):
 
         uncarbonated_inflow = np.zeros(stk_dims_no_k.shape)
 
-        for t in range(1, stk_in_use._n_t):
+        for t in range(1, stk_use._n_t):
 
             # (I1) get outflow by cohort (cement mass)
-            ages, inflow = get_age_distribution(stk_in_use, t, data_type="outflow")
+            ages, inflow = get_age_distribution(stk_use, t, data_type="outflow")
             inflow = inflow[..., cement_k_idx]  # select cement constituent only
             ages = ages.reshape(
                 (-1,) + (1,) * (inflow.ndim - 1)
@@ -364,15 +394,20 @@ class CementCarbonUptakeModel(BaseModel):
 
             # (I2) get carbonation depth by cohort
             k_free = k_free_arr[: t + 1, ...]
-            d_in_use = np.sqrt(np.maximum(ages - 1, 0)) * k_free
+            d_use = np.sqrt(np.maximum(ages - 1, 0)) * k_free
 
             # (I3) calculate uncarbonated mass by cohort
             thickness = thickness_in[: t + 1, ...]
-            d_available = np.maximum(thickness - d_in_use, 0)
+            d_available = np.maximum(thickness - d_use, 0)
             uncarbonated_fraction = d_available / thickness
 
             # (I4) sum over all age cohorts, convert to flodym array
             uncarbonated_inflow[t] = (inflow * uncarbonated_fraction).sum(axis=(0))
+
+        # (I5) only the non-hibernated, non-reused outflow enters eol: rescale from in-use outflow to eol inflow
+        uncarbonated_inflow *= safe_share(
+            self.stocks["eol_waste"].inflow[{"k": "Cement"}], stk_use.outflow[{"k": "Cement"}]
+        )
 
         uncarbonated_inflow = fd.FlodymArray(dims=stk_dims_no_k, values=uncarbonated_inflow)
 
@@ -389,8 +424,8 @@ class CementCarbonUptakeModel(BaseModel):
         # Context for why list comprehension is used instead of np.arange():
         # time fd.DimensionSet fails as it doesn't accept it as "normal" int
         # when dtype = np.int64 selcted, the printing agedim becomes very ugly
-        ages = [i for i in range(self.stocks["in_use"]._n_t)][::-1]
-        ageletter = self.get_unused_dimletter(exclude_letters=eol_dims.letters)
+        ages = [i for i in range(self.stocks["use"]._n_t)][::-1]
+        ageletter = self.get_unused_dimletter(exclude_letters=stk_use.dims.letters)
         agedim = fd.Dimension(name="age", letter=ageletter, items=ages, dtype=int)
         agedimset = fd.DimensionSet(dim_list=[agedim])
         age = fd.FlodymArray(dims=agedimset, values=np.array(ages), dtype=float)
@@ -418,7 +453,7 @@ class CementCarbonUptakeModel(BaseModel):
                 fd.DimensionSet(dim_list=[prm["waste_type_split"].dims["w"]])
             )
         )
-        k["new concrete"] = k_free_in
+        k["New Concrete"] = k_free_in
         d = k * age_after_demolition.apply(np.sqrt)
 
         # (II3) calculate added carbonation depth beteen two time steps
@@ -547,6 +582,15 @@ def get_volume_sphere(a: fd.FlodymArray, b: fd.FlodymArray) -> fd.FlodymArray:
 
     factor = np.pi / (3 * (rmax - rmin))
     return factor * (rmax**4 - rmin**4)
+
+
+def safe_share(part: fd.FlodymArray, total: fd.FlodymArray) -> np.ndarray:
+    """
+    Share part / total in the dimensions of total, set to zero where total is zero.
+    """
+    part_val = part.cast_to(total.dims).values
+    total_val = total.values
+    return np.divide(part_val, total_val, out=np.zeros_like(total_val), where=total_val != 0)
 
 
 def windowed_sum(arr: np.ndarray, window: int):

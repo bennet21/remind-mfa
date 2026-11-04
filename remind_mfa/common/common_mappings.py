@@ -14,22 +14,13 @@ class Mapping:
         return self.dct.get(key, key)
 
 
-class CommonDimensionFiles(Mapping):
-
-    _own_mapping = {
-        "Time": "time_in_years",
-        "Historic Time": "historic_years",
-        "Region": "regions",
-        "Driver Scenario": "ssp",
-    }
-
-
 class CommonDisplayNames(Mapping):
 
     _own_mapping = {
         # for markdown export
         "name": "Name",
         "letter": "Letter",
+        "items": "Items",
         "dim_letters": "Dimensions",
         "from_process_name": "Origin Process",
         "to_process_name": "Destination Process",

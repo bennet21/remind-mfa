@@ -6,7 +6,12 @@ from pydantic import model_validator, ConfigDict
 from remind_mfa.common.data_transformations import broadcast_trailing_dimensions
 from remind_mfa.common.trade import Trade
 from remind_mfa.common.helpers import RemindMFABaseModel
-from remind_mfa.common.data_blending import blend
+from remind_mfa.common.data_blending import (
+    blend,
+    critically_damped_blend,
+    DEFAULT_APPROACHING_TIME,
+)
+from remind_mfa.common.assumptions_doc import add_assumption_doc
 
 
 class TradeExtrapolator(RemindMFABaseModel):
@@ -14,17 +19,24 @@ class TradeExtrapolator(RemindMFABaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    historic_trade: Trade
-    """historic_trade (Trade): Historic trade data."""
+    historical_trade: Trade
+    """historical_trade (Trade): Historical trade data."""
     future_trade: Trade
     """future_trade (Trade): Future trade data, which is written to."""
     future_dom_supply: fd.FlodymArray = None
-    """future_dom_supply (FlodymArray): The domestic supply values to scale the historic exports by.
+    """future_dom_supply (FlodymArray): The domestic supply values to scale the historical exports by.
     Setting this means calculating trade in forward mode
     """
     future_dom_demand: fd.FlodymArray = None
-    """future_dom_demand (FlodymArray): The domestic demand values to scale the historic imports by.
+    """future_dom_demand (FlodymArray): The domestic demand values to scale the historical imports by.
     Setting this means calculating trade in backward mode
+    """
+    trade_factor: fd.FlodymArray | float = 1.0
+    """trade_factor (FlodymArray | float): Scenario factor on the extrapolated trade. Must only
+    contain dimensions of the future trade. Defaults to no scaling.
+    The factor multiplies both import and export flows (including stopover trade) after they have
+    been extrapolated and balanced without it. See :meth:`apply_trade_factor` for how the global
+    balance is restored for factors that differ between regions.
     """
     _eps: float = 1e-6
     """Small value to avoid division by zero and to check for near-zero values in the data."""
@@ -35,14 +47,14 @@ class TradeExtrapolator(RemindMFABaseModel):
             raise ValueError("Exactly one of future_dom_supply or future_dom_demand must be set.")
         if "t" not in (self.future_dom_demand or self.future_dom_supply).dims.letters:
             raise ValueError("Future domestic demand or supply must have a (full) time dimension.")
-        if "h" not in self.historic_trade.imports.dims:
-            raise ValueError("Historic trade data must have a historic time dimension.")
+        if "h" not in self.historical_trade.imports.dims:
+            raise ValueError("Historical trade data must have a historical time dimension.")
         if "t" not in self.future_trade.imports.dims:
             raise ValueError("Future trade data must have a time dimension.")
         # all other dims must be the same
-        if self.historic_trade.imports.dims.drop("h") != self.future_trade.imports.dims.drop("t"):
+        if self.historical_trade.imports.dims.drop("h") != self.future_trade.imports.dims.drop("t"):
             raise ValueError(
-                "Apart from time, historic and future trade data must have the same dimensions."
+                "Apart from time, historical and future trade data must have the same dimensions."
             )
         return self
 
@@ -84,8 +96,8 @@ class TradeExtrapolator(RemindMFABaseModel):
         """Get flodym arrays for imports and exports depending on the direction set in
         set_direction.
         """
-        self.historic_first = getattr(self.historic_trade, self.scaled_first)
-        self.historic_second = getattr(self.historic_trade, self.scaled_second)
+        self.historical_first = getattr(self.historical_trade, self.scaled_first)
+        self.historical_second = getattr(self.historical_trade, self.scaled_second)
         self.future_first = getattr(self.future_trade, self.scaled_first)
         self.future_second = getattr(self.future_trade, self.scaled_second)
 
@@ -99,7 +111,7 @@ class TradeExtrapolator(RemindMFABaseModel):
 
         if self.future_first.dims - self.dims_out:
             raise ValueError(
-                "All future trade dimensions must be contained either in scaler or in historic trade."
+                "All future trade dimensions must be contained either in scaler or in historical trade."
             )
 
     def get_recent_averages(self):
@@ -107,48 +119,51 @@ class TradeExtrapolator(RemindMFABaseModel):
         and for the scaler. These are used as starting points/reference for the extrapolation, to
         avoid extrapolating from a single year which might be an outlier.
         """
-        averager = RecentHistoricalAverage(dims=self.historic_first.dims)
+        averager = RecentHistoricalAverage(dims=self.historical_first.dims)
 
-        self.historic_first_0 = averager.apply(self.historic_first).cast_to(
+        self.historical_first_0 = averager.apply(self.historical_first).cast_to(
             self.dims_out
         )  # * (1 - self.eps)
-        self.historic_second_0 = averager.apply(self.historic_second).cast_to(
+        self.historical_second_0 = averager.apply(self.historical_second).cast_to(
             self.dims_out
         )  # * (1 - self.eps)
         self.scaler_first_0 = averager.apply(self.scaler_first).cast_to(self.dims_out)
         scaler_second_hist = (
-            self.scaler_first[{"t": self.historic_first.dims["h"]}]
-            - self.historic_first
-            + self.historic_second
+            self.scaler_first[{"t": self.historical_first.dims["h"]}]
+            - self.historical_first
+            + self.historical_second
         )
         self.scaler_second_0 = averager.apply(scaler_second_hist).cast_to(self.dims_out)
 
     def calc_trade(self):
         """The actual trade calculations"""
 
-        self.id_hist = {"t": self.historic_first.dims["h"]}
+        self.id_hist = {"t": self.historical_first.dims["h"]}
         self.remove_stopover()
         self.scale_first()
         stopover_trade = self.add_stopover()
         self.scale_second(stopover_trade)
-        self.balance()
+        self.blend_transition()
+        self.future_trade.balance(to="hmean")
+        self.apply_trade_factor()
+        self.clip_excess_trade()
 
     def scale_first(self):
         # scale "first" trade flow (imports in demand-driven mode)
         self.future_first[...] = self.scaling(
-            trd_0=self.historic_first_0,
+            trd_0=self.historical_first_0,
             dom_0=self.scaler_first_0,
             dom=self.scaler_first,
         )
         # make sure historical years equal historical data
-        self.future_first[self.id_hist] = self.historic_first
+        self.future_first[self.id_hist] = self.historical_first
 
     def remove_stopover(self):
         """Split off "stopover" (re-export) trade before scaling.
 
         Sometimes trade exceeds domestic supply and demand. For example, a country could have
         zero production (i.e. all supply through imports), but still have some exports, because
-        we bundle together trade across several stages along the fabrication process. So it
+        we bundle together trade across several stages along the manufacturing process. So it
         imports semi-finished products and exports finished products. In this case, it makes no
         sense to scale that pass-through trade with domestic supply/demand, as it might grow from
         zero to a finite value, which is an infinite relative growth.
@@ -162,9 +177,9 @@ class TradeExtrapolator(RemindMFABaseModel):
         making it over-grow relative to its domestic driver (which drives domestic supply/demand
         negative for heavy importers/re-exporters).
         """
-        self.stopover_0 = (self.historic_second_0 - self.scaler_second_0).maximum(0)
-        self.historic_first_0[...] -= self.stopover_0
-        self.historic_second_0[...] -= self.stopover_0
+        self.stopover_0 = (self.historical_second_0 - self.scaler_second_0).maximum(0)
+        self.historical_first_0[...] -= self.stopover_0
+        self.historical_second_0[...] -= self.stopover_0
 
     def add_stopover(self) -> fd.FlodymArray:
         """Scale the stopover (re-export) trade and add it to the (already scaled) future first
@@ -173,13 +188,13 @@ class TradeExtrapolator(RemindMFABaseModel):
 
         Stopover is pass-through trade, decoupled from the transit region's own domestic driver,
         so - unlike :meth:`scale_first` - it is scaled by *global* scaler growth (region-
-        independent, per good).
+        independent, per end use).
         """
         global_scaler = self.scaler_first.sum_over("r")
         global_scaler_0 = self.scaler_first_0.sum_over("r").maximum(self._eps)
         stopover_trade = self.stopover_0 * (global_scaler / global_scaler_0)
         self.future_first[...] += stopover_trade
-        self.future_first[self.id_hist] = self.historic_first
+        self.future_first[self.id_hist] = self.historical_first
         return stopover_trade
 
     def scale_second(self, stopover_trade: fd.FlodymArray):
@@ -188,54 +203,83 @@ class TradeExtrapolator(RemindMFABaseModel):
         (exports with dom_supply, imports with dom_demand).
         But this depends on the second trade itself, via the mass balance, which results in
         a 2x2 equation system. We solve it with a fixed-point iteration starting from
-        historic_second_0.
+        historical_second_0.
         """
-        self.future_second[...] = self.historic_second_0
-        self.future_second[self.id_hist] = self.historic_second
+        self.future_second[...] = self.historical_second_0
+        self.future_second[self.id_hist] = self.historical_second
         for _ in range(3):
             self.scaler_second = (
                 self.scaler_first - self.future_first + self.future_second + stopover_trade
             )
             self.future_second[...] = self.scaling(
-                trd_0=self.historic_second_0,
+                trd_0=self.historical_second_0,
                 dom_0=self.scaler_second_0,
                 dom=self.scaler_second,
                 reduced_linear=False,
             )
-            self.future_second[self.id_hist] = self.historic_second
+            self.future_second[self.id_hist] = self.historical_second
 
         self.future_second[...] += stopover_trade
-        self.future_second[self.id_hist] = self.historic_second
+        self.future_second[self.id_hist] = self.historical_second
 
-    def balance(self):
-        """We balance global imports and exports to their hmean
-        Balancing might result in a situation where imports exceed total demand or exports
-        exceed total supply, which would lead to a negative flow on one side of the trade
-        market. If this is the case, we scale down the trade flow which is too big.
-        We then balance trades again, which might lead to excess trade in further regions,
-        which is why we repeat the process iteratively until the excess is sufficiently small.
+    def blend_transition(self):
+        """Smooth the transition of both trade flows from historical to future years with a
+        critically damped blend, before balancing. Negative values are set to zero.
         """
-        self.future_trade.balance(to="hmean")
-        tolerance = self.scaler_first
+        n_historical = self.historical_first.dims["h"].len
+        for future_flow in (self.future_first, self.future_second):
+            future_flow[...] = critically_damped_blend(
+                future_flow,
+                n_historical=n_historical,
+                approaching_time=DEFAULT_APPROACHING_TIME,
+            ).maximum(0)
+        add_assumption_doc(
+            type="model assumption",
+            name="Critically damped blend of extrapolated trade",
+            value=DEFAULT_APPROACHING_TIME,
+            description=(
+                "Extrapolated imports and exports are blended smoothly from historical trends to the "
+                "extrapolated values with a critically damped blend, before they are balanced. "
+                "The value is the approaching time in years."
+            ),
+        )
 
+    def apply_trade_factor(self):
+        """Multiply the balanced trade flows with the scenario trade factor and restore the global
+        balance.
+
+        A factor that is uniform across regions keeps imports and exports balanced, so it acts
+        exactly. A factor that differs between regions generally leaves global imports and exports
+        unequal. Since trade requires both a buyer and a seller, the global trade is then limited
+        to the smaller of both, and all flows of the larger side are scaled down proportionally.
+        The factor is thus exact on the smaller side and an upper bound on the larger side.
+        """
+        for future_flow in (self.future_trade.imports, self.future_trade.exports):
+            future_flow[...] = future_flow * self.trade_factor
+        self.future_trade.balance(to="minimum")
+        add_assumption_doc(
+            type="model assumption",
+            name="Balancing of scenario trade factor",
+            description=(
+                "The scenario trade factor multiplies extrapolated and balanced imports and "
+                "exports. If it differs between regions, global trade is limited to the smaller "
+                "of global imports and exports, and the larger side is scaled down "
+                "proportionally across all regions."
+            ),
+        )
+
+    def clip_excess_trade(self):
+        """Balancing might result in a situation where imports exceed total demand or exports
+        exceed total supply, which would lead to a negative flow on one side of the trade
+        market. The net flow of the first trade flow is therefore capped at its scaler
+        (see :meth:`Trade.cap_net`), which keeps the derived domestic quantity non-negative.
+        """
         max_value = self.scaler_first.values.max()
         epsilon = np.finfo(self.scaler_first.values.dtype).eps
         tolerance = epsilon * max_value * 10
-        for i in range(50):
-            scaler_second = self.scaler_first - self.future_first + self.future_second
-            excess_trade = -(scaler_second.minimum(0.0))
-            if excess_trade.values.max() < tolerance:
-                break
-            # Clamp such that future_first stays non-negative to avoid divergence.
-            # Negative values here only occur if scaler_first or future_second are negative,
-            # e.g. due to previous tolerances,
-            excess_trade = excess_trade.minimum(self.future_first)
-            self.future_first[...] = self.future_first - excess_trade
-
-            # only scale the items without excess trade,
-            # otherwise we would create new excess trade by scaling down the opposite flows
-            scaled = excess_trade.cast_values_to(self.future_first.dims) == 0
-            self.future_trade.balance(to="minimum", mask_scaled=scaled)
+        self.future_trade.cap_net(
+            limit=self.scaler_first, direction=self.scaled_first, tolerance=tolerance
+        )
 
         assert np.allclose(
             self.future_first.sum_over(
@@ -303,7 +347,7 @@ class RecentHistoricalAverage(RemindMFABaseModel):
     @model_validator(mode="after")
     def validate_dims(self):
         if self.dims.letters[0] != "h":
-            raise ValueError("First dimension of dims must be historic time 'h'.")
+            raise ValueError("First dimension of dims must be historical time 'h'.")
         return self
 
     @property

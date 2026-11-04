@@ -2,9 +2,9 @@
     [base.input]
         force_extract_tgz = false
         input_data_path = "data_in"
-        input_data_revision = "2.2.2"
-        region_mapping = "h12"
-        scenarios_path = "./scenarios"
+        input_data_revision = "2.9.2_cement"
+        region_mapping = "gtap155"
+        scenarios_path = "config/scenarios"
 
     [base.model_switches]
         scenario = "SSP2"
@@ -23,15 +23,15 @@
         gdp.do_visualize = false
         gdp.per_capita = false
         production.do_visualize = true
-        trade.do_visualize = false
+        trade.do_visualize = true
         consumption.do_visualize = true
         consumption.per_capita = true
         sankey.do_visualize = false
         sankey.plotter_args.slice_dict = { "t" = 2050 }
-        sankey.plotter_args.exclude_processes = ["sysenv"]
+        sankey.plotter_args.exclude_processes = ["sysenv", "imports", "exports"]
         sankey.plotter_args.exclude_flows = []
         extrapolation.do_visualize = true
-        sector_splits.do_visualize = false
+        end_use_split.do_visualize = false
 
     [base.export]
         do_export = true
@@ -40,15 +40,17 @@
         # prefix = "test"
         pickle.do_export = true
         csv.do_export = false
-        iamc.do_export = false
+        iamc_reporting.do_export = false
+        iamc_raw.do_export = false
         mrindustry.do_export = false
         assumptions.do_export = false
         docs.do_export = false
+        docs.apply_mappings = true
 
 [plastics]
     [plastics.visualization]
         sankey.plotter_args.slice_dict = { "t" = 2050, "e" = "C" }
-        material_splits.do_visualize = false
+        polymer_splits.do_visualize = false
         flows.do_visualize = false
         scenario_params.do_visualize = false
 
@@ -59,17 +61,13 @@
 [cement]
     [cement.model_switches]
         carbonation = false
-        parameter_reconciliation.do_reconcile = false
-        parameter_reconciliation.do_combine_mfas = true
+        parameter_reconciliation = false
 
     [cement.visualization]
         eol_stock.do_visualize = false
         eol_stock.over_gdp = false
         eol_stock.per_capita = false
-        prod_clinker.do_visualize = false
-        prod_cement.do_visualize = true
-        prod_product.do_visualize = false
-        sankey.plotter_args.split_flows_by = "End Use"
-        sankey.plotter_args.color_scheme = "blueish"
-        sankey.plotter_args.flow_color = "hsl(230,20,70)"
+        clinker_production.do_visualize = false
+        cement_production.do_visualize = true
+        construction.do_visualize = false
         carbonation.do_visualize = false

@@ -1,32 +1,33 @@
 | Name                               |
 |:-----------------------------------|
 | System environment                 |
-| Feedstock(fossil)                  |
-| Feedstock(biomass)                 |
-| Feedstock(daccu)                   |
-| Feedstock(ccu)                     |
-| High Value Chemical input          |
-| C4 input                           |
+| Feedstock supply (fossil)          |
+| Feedstock supply (biomass)         |
+| Feedstock supply (DACCU)           |
+| Feedstock supply (CCU)             |
+| HVC production                     |
+| C4 production                      |
 | Polymerization                     |
-| Primary Market                     |
-| Fabrication                        |
-| Good Market                        |
-| Use Phase                          |
-| EoL                                |
-| Waste Market                       |
-| Mechanical Recycling               |
-| Chemical Recycling                 |
+| Primary market                     |
+| Manufacturing                      |
+| Manufactured products market       |
+| Use phase                          |
+| End-of-life management             |
+| Reuse                              |
+| Waste market                       |
+| Mechanical recycling               |
+| Chemical recycling                 |
 | Incineration                       |
 | Landfilled                         |
-| Collected                          |
+| Sorting                            |
 | Uncollected                        |
 | Uncontrolled                       |
 | Emissions                          |
 | Captured                           |
 | Atmosphere                         |
-| Other Reactants                    |
+| Other reactants                    |
 | Losses                             |
-| Auxiliary Recyclate Trade          |
-| Auxiliary Recycled Feedstock Trade |
+| Auxiliary recyclate trade          |
+| Auxiliary recycled feedstock trade |
 | Imports                            |
 | Exports                            |

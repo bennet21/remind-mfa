@@ -54,8 +54,8 @@ class Extrapolation(RemindMFABaseModel):
         return len(self.prm_names)
 
     @property
-    def n_historic(self):
-        """Number of historic data points to use for regression."""
+    def n_historical(self):
+        """Number of historical data points to use for regression."""
         return self.data_to_extrapolate.shape[0]
 
     @property
@@ -63,15 +63,15 @@ class Extrapolation(RemindMFABaseModel):
         """Optimized parameters after regression (read-only)."""
         return self._fit_prms
 
-    def extrapolate(self, historic_from_regression: bool = False):
+    def extrapolate(self, historical_from_regression: bool = False):
         """
         Calls the regression method and returns extrapolated values.
-        Per default, historic values are kept, but this can be changed by setting `historic_from_regression` to True.
+        Per default, historical values are kept, but this can be changed by setting `historical_from_regression` to True.
         """
 
         regression = self.regress()
-        if not historic_from_regression:
-            regression[: self.n_historic, ...] = self.data_to_extrapolate
+        if not historical_from_regression:
+            regression[: self.n_historical, ...] = self.data_to_extrapolate
         return regression
 
     @abstractmethod
@@ -143,16 +143,34 @@ class Extrapolation(RemindMFABaseModel):
     def regress_common(self, predictor, data, weights, bounds):
         """
         Finds optimal fit of data through least squares. Weights and bounds are applied.
+        Parameters with equal lower and upper bound are fixed to that value and not optimized,
+        as scipy requires the lower bound to be strictly smaller than the upper bound.
         """
         fitting_function = self.get_fitting_function(
-            predictor[: self.n_historic, ...],
+            predictor[: self.n_historical, ...],
             data,
             weights,
         )
         initial_guess = self.initial_guess(predictor, data)
         # correct initial guess
         initial_guess = self.correct_initial_guess_with_bounds(initial_guess, bounds)
-        fit_prms = least_squares(fitting_function, x0=initial_guess, gtol=1.0e-12, bounds=bounds).x
+
+        lower = np.broadcast_to(bounds[0], initial_guess.shape)
+        upper = np.broadcast_to(bounds[1], initial_guess.shape)
+        free = lower != upper
+        fit_prms = np.where(free, initial_guess, lower)
+
+        def fitting_function_free(free_prms: np.ndarray) -> np.ndarray:
+            prms = fit_prms.copy()
+            prms[free] = free_prms
+            return fitting_function(prms)
+
+        fit_prms[free] = least_squares(
+            fitting_function_free,
+            x0=fit_prms[free],
+            gtol=1.0e-12,
+            bounds=(lower[free], upper[free]),
+        ).x
         regression = self.func(predictor, fit_prms)
         return fit_prms, regression
 
@@ -200,7 +218,7 @@ class PehlExtrapolation(Extrapolation):
     def initial_guess(self, predictor_values, data_to_extrapolate):
         return np.array(
             [
-                2.0 * np.max(predictor_values[self.n_historic - 1, ...]),
+                2.0 * np.max(predictor_values[self.n_historical - 1, ...]),
                 np.max(data_to_extrapolate[-1, ...]),
             ]
         )
@@ -216,7 +234,7 @@ class ExponentialSaturationExtrapolation(Extrapolation):
 
     def initial_guess(self, predictor_values, data_to_extrapolate):
         current_level = np.max(data_to_extrapolate[-1, ...])
-        current_extrapolator = np.max(predictor_values[self.n_historic - 1, ...])
+        current_extrapolator = np.max(predictor_values[self.n_historical - 1, ...])
         initial_saturation_level = 2.0 * current_level
         initial_stretch_factor = (
             -np.log(1 - current_level / initial_saturation_level) / current_extrapolator
