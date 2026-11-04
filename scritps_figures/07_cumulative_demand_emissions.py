@@ -7,7 +7,7 @@ Scenarios are ordered SSP1 (bottom) to SSP5 (top) on the y-axis.
 
 Demand is the market cement demand (cement going into products plus construction losses) and
 emissions are the calcination CO2 of the clinker and cement kiln dust needed for it, both as
-defined in `helpers.cement_demand` / `helpers.process_emissions`. Emissions are therefore
+defined in `helpers.ReconciledData` / `helpers.process_emissions`. Emissions are therefore
 attributed to the consuming region; globally the consumption- and production-based totals are
 identical, because trade cancels out.
 
@@ -37,12 +37,11 @@ from constants import (
     CE_SHADE,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
-    SSP_CACHE_DIRS,
+    SCENARIOS,
     SSP_COLORS,
     SSP_LABELS,
-    SSP_SOURCE_PICKLES,
 )
-from helpers import aggregate_by_region, cement_demand, load_mfas, process_emissions, shade
+from helpers import aggregate_by_region, load_figure_data, shade, to_h12
 
 GT_PER_T = 1e-9
 FIRST_FUTURE_YEAR = LAST_HISTORICAL_YEAR + 1
@@ -55,15 +54,13 @@ CALLOUT_COLOR = "#555555"
 def load_scenario_data() -> dict[str, dict]:
     """Load all SSP scenarios and compute global cumulative demand and emissions (2024-2100)."""
     result = {}
-    for ssp, pickle_path in SSP_SOURCE_PICKLES.items():
+    for ssp in SCENARIOS:
         print(f"Loading {ssp}...")
-        combined = load_mfas(pickle_path, SSP_CACHE_DIRS[ssp])["combined"]
-        # All parameters come from the reconciled MFA, so that reconciled values
-        # (cement_losses in particular) are the ones used here.
-        prm = combined.parameters
-
-        demand_arr = cement_demand(combined)
-        emissions_arr = process_emissions(demand_arr, prm)
+        # computed on the level of the model regions with the reconciled parameters
+        reconciled = load_figure_data(ssp).reconciled
+        demand_arr = to_h12(reconciled.demand)
+        emissions_arr = to_h12(reconciled.emissions)
+        population_arr = to_h12(reconciled.population)
 
         years = np.array(demand_arr.dims["t"].items)
         future = years > LAST_HISTORICAL_YEAR
@@ -71,7 +68,7 @@ def load_scenario_data() -> dict[str, dict]:
 
         future_demand = demand_arr.values[future]
         future_emissions = emissions_arr.values[future]
-        future_population = prm["population"].values[future]
+        future_population = population_arr.values[future]
 
         # World per capita: sum over regions first, divide second. Summing regional
         # per-capita values instead would not be a per-capita quantity.

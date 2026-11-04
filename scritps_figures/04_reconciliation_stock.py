@@ -11,10 +11,11 @@ estimate. All bars show cement contained in concrete, at the last historic year.
 produced: absolute (t/capita) and relative (bottom-up = 100%).
 
 Data sources (all reduced to cement-in-concrete by region and stock type at the last historic year):
-- bottom-up: pure bottom-up in-use concrete stock incl. hibernating stock
-  (`model.bu_stock`, a stock array with dims t,r,b,s), converted to cement via `cement_ratio`
-- reconciled: reconciled combined MFA in-use stock
-- top-down: pre-reconciliation top-down MFA in-use stock
+- bottom-up: pure bottom-up in-use concrete stock incl. unoccupied residential stock, computed
+  from the pre-reconciliation parameters and converted to cement via `cement_ratio`
+- reconciled: in-use stock of the reconciled model run
+- top-down: in-use stock of the model run without reconciliation
+All are computed on the level of the model regions and summed to H12.
 
 Run from the repository root:
     uv run python scritps_figures/04_reconciliation_stock.py
@@ -25,8 +26,7 @@ from plotly.subplots import make_subplots
 
 from constants import (
     BACKGROUND,
-    SOURCE_PICKLE,
-    CACHE_DIR_CEMENT,
+    MAIN_SCENARIO,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
@@ -34,7 +34,7 @@ from constants import (
     AGG_REGION_ORDER,
     STOCK_TYPE_BASE_COLORS,
 )
-from helpers import load_mfas
+from helpers import load_figure_data, to_h12
 
 H = LAST_HISTORICAL_YEAR
 CEMENT_CONCRETE = {"k": "cement", "m": "concrete"}
@@ -57,8 +57,7 @@ ROW_TITLES = {
 PATTERN_KWARGS = {"fgcolor": "white", "size": 7, "solidity": 0.4}
 LEGEND_GREY = "#9a9a9a"
 
-mfas = load_mfas(SOURCE_PICKLE, CACHE_DIR_CEMENT)
-td, recon, bu = mfas["td"], mfas["combined"], mfas["bu"]
+data = load_figure_data(MAIN_SCENARIO)
 
 # store information on which dimensions are subcategories of others.
 GOOD_ITEMS = {
@@ -89,18 +88,14 @@ def by_stocktype(arr, stocktype: str):
     return reduced
 
 
-# Pure bottom-up concrete stock (incl. hibernating), converted to cement-in-concrete.
-# `bu` is the bu_in_use stock array (dims t,r,b,s); cement_ratio (dims r,m) lives on the top-down MFA.
-bu_cement_ratio = td.parameters["cement_ratio"][{"m": "concrete"}]
-
 # Cement-in-concrete stock at the last historic year, per estimate (reduced to (r,) per type below).
 STOCK = {
-    "BU": bu[{"t": H}] * bu_cement_ratio,
-    "reconciled": recon.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}],
-    "TD": td.stocks["in_use"].stock[{"t": H, **CEMENT_CONCRETE}],
+    "BU": to_h12(data.reconciled.bu_stock),
+    "reconciled": to_h12(data.reconciled.stock[{"t": H, **CEMENT_CONCRETE}]),
+    "TD": to_h12(data.unreconciled.stock[{"t": H, **CEMENT_CONCRETE}]),
 }
-POP = td.parameters["population"]
-regions = list(td.stocks["in_use"].stock.dims["r"].items)
+POP = to_h12(data.reconciled.population)
+regions = list(STOCK["TD"].dims["r"].items)
 x_labels = [REGION_DISPLAY_NAMES.get(str(r), str(r)) for r in regions]
 
 

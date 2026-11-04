@@ -17,8 +17,7 @@ from plotly.subplots import make_subplots
 
 from constants import (
     BACKGROUND,
-    SSP_SOURCE_PICKLES,
-    SSP_CACHE_DIRS,
+    SCENARIOS as SCENARIO_KEYS,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
@@ -33,7 +32,7 @@ from constants import (
     OTHER_RES_COM_MORTAR_NAME,
     OTHER_STRUCTURE_KEYS,
 )
-from helpers import load_mfas, shade, shade_levels
+from helpers import load_figure_data, shade, shade_levels, to_h12
 
 MT_PER_T = 1e-6
 TD_LINE_COLOR = "#222222"
@@ -44,11 +43,11 @@ MIN_FRACTION_GLOBAL = 0.04
 MIN_FRACTION_REGIONAL = 0.10
 STRUCTURE_SHADE_SPREAD = 0.10
 
-# Which scenarios to plot: "all", or a list of keys from constants.SSP_SOURCE_PICKLES,
+# Which scenarios to plot: "all", or a list of keys from constants.SCENARIOS,
 # e.g. ["SSP2"].
 SCENARIOS = "all"
 
-_ALL_SCENARIOS = list(SSP_SOURCE_PICKLES.keys())
+_ALL_SCENARIOS = list(SCENARIO_KEYS)
 
 
 def selected_scenarios() -> list[str]:
@@ -128,7 +127,9 @@ _INLINE_LABELS = {
 
 
 def demand(combined, selections, region=None):
-    """Combined cement demand (Mt) summed to time, for the given selection(s)."""
+    """Combined cement demand (Mt) summed to time, for the given selection(s).
+
+    `combined` is the reconciled in-use inflow of new material, aggregated to H12."""
     if isinstance(selections, dict):
         selections = [selections]
     region_items = [
@@ -142,13 +143,15 @@ def demand(combined, selections, region=None):
             filter_dict = {"k": "cement", **sel}
             if source_region is not None:
                 filter_dict["r"] = source_region
-            arr = combined.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
+            arr = combined[filter_dict].sum_to("t") * MT_PER_T
             result = arr if result is None else result + arr
     return result
 
 
 def td_demand(td, selection: dict):
-    """Pre-reconciliation top-down total cement demand (Mt) summed to time."""
+    """Pre-reconciliation top-down total cement demand (Mt) summed to time.
+
+    `td` is the unreconciled in-use inflow of new material, aggregated to H12."""
     region = selection.get("r")
     region_items = [
         source_region
@@ -162,7 +165,7 @@ def td_demand(td, selection: dict):
             filter_dict["r"] = source_region
         else:
             filter_dict.pop("r", None)
-        arr = td.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
+        arr = td[filter_dict].sum_to("t") * MT_PER_T
         result = arr if result is None else result + arr
     return result
 
@@ -424,13 +427,13 @@ def plot_regional(
 
 def run(ssp: str):
     print(f"--- Scenario {ssp} ---")
-    mfas = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])
-    combined = mfas["combined"]
-    td = mfas["td"]
+    data = load_figure_data(ssp)
+    combined = to_h12(data.reconciled.inflow)
+    td = to_h12(data.unreconciled.inflow)
 
-    time = combined.stocks["in_use"].stock.dims["t"].items
-    regions = combined.stocks["in_use"].inflow.dims["r"].items
-    all_structures = combined.stocks["in_use"].inflow.dims["s"].items
+    time = combined.dims["t"].items
+    regions = combined.dims["r"].items
+    all_structures = combined.dims["s"].items
     buildings = [b for b in all_structures if str(b) not in OTHER_STRUCTURE_KEYS]
 
     series = build_series()

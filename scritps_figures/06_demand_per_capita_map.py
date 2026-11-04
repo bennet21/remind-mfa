@@ -1,19 +1,21 @@
 """Figure 6: world maps of cumulative future cement demand under SSP2.
 
 Choropleth maps in which each country is shaded by the cumulative future cement demand of its
-REMIND H12 region over 2024-2100, from the reconciled (combined) MFA. Four variants are produced:
-per-capita demand, total demand (Gt), and the corresponding gross process CO2 emissions.
+model region (constants.REGION_MAPPING) over 2024-2100, from the reconciled model run. Four
+variants are produced: per-capita demand, total demand (Gt), and the corresponding gross process
+CO2 emissions.
 
 Demand is the region's market cement demand (cement going into products plus construction
 losses) and emissions are the calcination CO2 of the clinker and cement kiln dust needed for
-it, both as defined in `helpers.cement_demand` / `helpers.process_emissions`. Emissions are
+it, both as defined in `helpers.ReconciledData` / `helpers.process_emissions`. Emissions are
 therefore attributed to the consuming region.
 
 The per-capita variants sum the annual ratio (that year's regional value divided by that
 year's regional population) over the future years. That is an average annual rate multiplied
 by the number of years, not the cumulative total divided by a single population figure.
 
-Countries are assigned to regions via the REMIND H12 regionmapping (`scritps_figures/h12.csv`).
+Countries are assigned to regions via the regionmapping of the model regions
+(constants.MODEL_REGIONMAPPING_CSV).
 Saved as PNGs in `data/cement/output/figures`.
 
 Run from the repository root:
@@ -28,24 +30,17 @@ from constants import (
     BACKGROUND,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
-    REGION_DISPLAY_NAMES,
-    REGIONMAPPING_CSV,
-    SSP_CACHE_DIRS,
-    SSP_SOURCE_PICKLES,
+    MODEL_REGIONMAPPING_CSV,
 )
-from helpers import cement_demand, load_mfas, process_emissions
+from helpers import load_figure_data
 
 GT_PER_T = 1e-9
 FIRST_FUTURE_YEAR = LAST_HISTORICAL_YEAR + 1
 
-mfas = load_mfas(SSP_SOURCE_PICKLES["SSP2"], SSP_CACHE_DIRS["SSP2"])
-combined = mfas["combined"]
-# All parameters are taken from the reconciled MFA, so that reconciled values
-# (cement_losses in particular) are the ones used here.
-prm = combined.parameters
-
-demand = cement_demand(combined)
-emissions = process_emissions(demand, prm)
+reconciled = load_figure_data("SSP2").reconciled
+demand = reconciled.demand
+emissions = reconciled.emissions
+population = reconciled.population
 
 
 def sum_future_years(array) -> dict[str, float]:
@@ -58,7 +53,7 @@ def sum_future_years(array) -> dict[str, float]:
 
 def cumulative_per_capita_demand() -> dict[str, float]:
     """Sum of annual per-capita cement demand (t/cap) over the future years, per region."""
-    return sum_future_years(demand / prm["population"])
+    return sum_future_years(demand / population)
 
 
 def cumulative_total_demand() -> dict[str, float]:
@@ -68,7 +63,7 @@ def cumulative_total_demand() -> dict[str, float]:
 
 def cumulative_process_emissions_per_capita() -> dict[str, float]:
     """Sum of annual per-capita process emissions (t CO2/cap) over the future years, per region."""
-    return sum_future_years(emissions / prm["population"])
+    return sum_future_years(emissions / population)
 
 
 def cumulative_process_emissions_total() -> dict[str, float]:
@@ -77,12 +72,11 @@ def cumulative_process_emissions_total() -> dict[str, float]:
 
 
 def country_table(region_values: dict[str, float], unit: str) -> pd.DataFrame:
-    mapping = pd.read_csv(REGIONMAPPING_CSV, sep=";")
-    mapping = mapping[mapping["CountryCode"] != "ATA"]  # Antarctica (nominally LAM)
+    mapping = pd.read_csv(MODEL_REGIONMAPPING_CSV, sep=";")
+    mapping = mapping[mapping["CountryCode"] != "ATA"]  # Antarctica
     mapping["value"] = mapping["RegionCode"].map(region_values)
-    region_names = {code: name.replace("<br>", " ") for code, name in REGION_DISPLAY_NAMES.items()}
     mapping["hover"] = (
-        mapping["RegionCode"].map(region_names).fillna(mapping["RegionCode"])
+        mapping["X"]
         + " ("
         + mapping["RegionCode"]
         + ")<br>"

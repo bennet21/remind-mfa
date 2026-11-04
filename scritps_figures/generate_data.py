@@ -1,17 +1,32 @@
 """Regenerate the cement model pickles that the figure scripts in this folder read from data_out.
 
 Run from the repo root: `uv run --no-sync python scritps_figures/generate_data.py`.
-Runs the cement model once per scenario in constants.SSP_PICKLENAMES, with config/figs_cement.toml
-stacked on config/default.toml. The overlay turns on parameter reconciliation and pickle export,
-so default.toml does not need to be edited to regenerate the pickles.
+Runs the cement model twice per scenario in constants.SCENARIOS on the constants.REGION_MAPPING
+level, with config/figs_cement.toml stacked on config/default.toml:
+- reconciled: parameter reconciliation on (set in the overlay), exported with RECONCILED_PREFIX.
+- unreconciled: parameter reconciliation off, exported with UNRECONCILED_PREFIX.
+
+After each run, the data needed by the figures is extracted into a small cache
+(helpers.figure_cache_paths), so the figure scripts do not need to load the model pickles.
 
 Rerun this after updating remind_mfa_data to refresh the figures' input data.
 """
 
 import logging
+import sys
 from pathlib import Path
 
-from constants import PATH_CEMENT, SSP_PICKLENAMES
+from constants import (
+    PATH_CEMENT,
+    RECONCILED_PREFIX,
+    REGION_MAPPING,
+    SCENARIOS,
+    SSP_SOURCE_PICKLES,
+    SSP_UNRECONCILED_PICKLES,
+    UNRECONCILED_PREFIX,
+)
+
+from helpers import extract_reconciled, extract_unreconciled, figure_cache_paths, save_pickle
 
 from remind_mfa.common.config_loader import load_config
 from remind_mfa.common.helpers import ModelNames, init_model
@@ -19,31 +34,47 @@ from remind_mfa.common.helpers import ModelNames, init_model
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
 
 
-def build_cfg(scenario: str) -> dict:
+def build_cfg(scenario: str, reconcile: bool) -> dict:
     cfg = load_config(["default", "figs_cement"], ModelNames.CEMENT)
+    cfg["input"]["region_mapping"] = REGION_MAPPING
     cfg["model_switches"]["scenario"] = scenario
+    cfg["model_switches"]["parameter_reconciliation"] = reconcile
     cfg["export"]["path"] = str(PATH_CEMENT)
+    cfg["export"]["prefix"] = RECONCILED_PREFIX if reconcile else UNRECONCILED_PREFIX
     return cfg
 
 
-def main() -> None:
-    for scenario, pickle_name in SSP_PICKLENAMES.items():
-        logging.info("=" * 80)
-        logging.info(f"Running cement model for scenario {scenario}...")
-        cfg = build_cfg(scenario)
-        model = init_model(cfg=cfg)
-        model.run()
-        model.export()
+def run(scenario: str, reconcile: bool) -> None:
+    label = "reconciled" if reconcile else "unreconciled"
+    logging.info("=" * 80)
+    logging.info(f"Running {label} cement model for scenario {scenario}...")
+    model = init_model(cfg=build_cfg(scenario, reconcile))
+    model.run()
+    model.export()
 
-        expected_pickle = Path(PATH_CEMENT) / pickle_name
-        if not expected_pickle.is_file():
-            raise RuntimeError(
-                f"Expected pickle {expected_pickle} was not created for scenario {scenario}. "
-                "The export folder naming (prefix_model_scenario_regionmapping in "
-                "common_export.py) may no longer match constants.SSP_PICKLENAMES."
-            )
-        logging.info(f"Wrote {expected_pickle}")
+    expected_pickle = (SSP_SOURCE_PICKLES if reconcile else SSP_UNRECONCILED_PICKLES)[scenario]
+    if not Path(expected_pickle).is_file():
+        raise RuntimeError(
+            f"Expected pickle {expected_pickle} was not created for scenario {scenario}. "
+            "The export folder naming (prefix_model_scenario_regionmapping in "
+            "common_export.py) may no longer match constants.SSP_SOURCE_PICKLES."
+        )
+    logging.info(f"Wrote {expected_pickle}")
+
+    # extract the figure data while the model is in memory, so that the figure scripts do not
+    # need to load the (large) model pickle
+    cache_path = figure_cache_paths(scenario)[label]
+    extract = extract_reconciled if reconcile else extract_unreconciled
+    save_pickle(extract(model), cache_path)
+    logging.info(f"Wrote {cache_path}")
+
+
+def main(scenarios: list[str]) -> None:
+    for scenario in scenarios:
+        run(scenario, reconcile=True)
+        run(scenario, reconcile=False)
 
 
 if __name__ == "__main__":
-    main()
+    # optional command line arguments: subset of scenarios to run
+    main(sys.argv[1:] or SCENARIOS)

@@ -21,23 +21,21 @@ from constants import (
     REGION_DISPLAY_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
-    SSP_CACHE_DIRS,
+    SCENARIOS,
     SSP_COLORS,
     SSP_DASHES,
     SSP_LABELS,
-    SSP_SOURCE_PICKLES,
 )
-from helpers import load_mfas
+from helpers import load_figure_data, to_h12
 
 MT_PER_T = 1e-6
 YLABEL = "Cement production (Mt)"
-SSPS = list(SSP_SOURCE_PICKLES.keys())
+SSPS = list(SCENARIOS)
 
-combined_by_ssp = {
-    ssp: load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])["combined"] for ssp in SSPS
-}
-time = combined_by_ssp["SSP2"].stocks["in_use"].stock.dims["t"].items
-regions = combined_by_ssp["SSP2"].stocks["in_use"].inflow.dims["r"].items
+# reconciled in-use inflow of new material, aggregated to H12
+combined_by_ssp = {ssp: to_h12(load_figure_data(ssp).reconciled.inflow) for ssp in SSPS}
+time = combined_by_ssp["SSP2"].dims["t"].items
+regions = combined_by_ssp["SSP2"].dims["r"].items
 
 
 def production(combined, region=None):
@@ -51,7 +49,7 @@ def production(combined, region=None):
         filter_dict = {"k": "cement"}
         if source_region is not None:
             filter_dict["r"] = source_region
-        arr = combined.stocks["in_use"].inflow[filter_dict].sum_to("t") * MT_PER_T
+        arr = combined[filter_dict].sum_to("t") * MT_PER_T
         result = arr if result is None else result + arr
     return result
 

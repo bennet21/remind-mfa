@@ -11,7 +11,7 @@ cumulative value up to CUMULATIVE_MARKER_YEAR_HISTORICAL and each of CUMULATIVE_
 (constants.py) with vertical tick marks, to avoid repeating the same explanation twice.
 
 Emissions are the calcination CO2 of the clinker and cement kiln dust needed for the region's
-market cement demand, as defined in `helpers.cement_demand` / `helpers.process_emissions`, so
+market cement demand, as defined in `helpers.ReconciledData` / `helpers.process_emissions`, so
 they are attributed to the consuming region. The historical segment is the stock-driven
 reconstruction of the future MFA over the historical years, not reported cement statistics.
 
@@ -40,11 +40,10 @@ from constants import (
     FIRST_MODEL_YEAR,
     HISTORICAL_COLOR,
     LAST_HISTORICAL_YEAR,
-    SSP_CACHE_DIRS,
+    SCENARIOS,
     SSP_LABELS,
-    SSP_SOURCE_PICKLES,
 )
-from helpers import aggregate_by_region, cement_demand, load_mfas, process_emissions, shade
+from helpers import aggregate_by_region, load_figure_data, shade, to_h12
 
 GT_PER_T = 1e-9
 REGION_COLORS = AGG_REGION_COLORS
@@ -55,15 +54,12 @@ MARKER_COLOR = "#222222"
 
 def load_emissions(ssp: str):
     """Process CO2 emissions (t) and population as (t, r) arrays, plus the year axis."""
-    # All parameters come from the reconciled MFA, so that reconciled values
-    # (cement_losses in particular) are the ones used here.
-    combined = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])["combined"]
-    prm = combined.parameters
-
-    emissions_arr = process_emissions(cement_demand(combined), prm)
+    # computed on the level of the model regions with the reconciled parameters
+    reconciled = load_figure_data(ssp).reconciled
+    emissions_arr = to_h12(reconciled.emissions)
     years = np.array(emissions_arr.dims["t"].items)
     region_items = np.array(emissions_arr.dims["r"].items)
-    return emissions_arr, prm["population"], years, region_items
+    return emissions_arr, to_h12(reconciled.population), years, region_items
 
 
 def load_regional_emissions(ssp: str) -> dict[str, dict[str, float]]:
@@ -398,7 +394,7 @@ def plot_scenario(
     save(fig, f"fig8_regional_cumulative_emissions_{ssp}", width=1000, height=430)
 
 
-base_ssps = [ssp for ssp in SSP_SOURCE_PICKLES if not ssp.endswith("_CE")]
+base_ssps = [ssp for ssp in SCENARIOS if not ssp.endswith("_CE")]
 
 for ssp in base_ssps:
     print(f"Loading {ssp}...")
@@ -408,7 +404,7 @@ for ssp in base_ssps:
     ce_ssp = f"{ssp}_CE"
     ce_data = None
     ce_percapita_data = None
-    if ce_ssp in SSP_SOURCE_PICKLES:
+    if ce_ssp in SCENARIOS:
         print(f"Loading {ce_ssp}...")
         ce_data = load_regional_emissions(ce_ssp)
         ce_percapita_data = load_regional_emissions_per_capita(ce_ssp)

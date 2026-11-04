@@ -7,9 +7,18 @@ CACHE_DIR_CEMENT = Path("data/cement/output/cache")
 FIGURES_DIR = Path("data/cement/output/figures")
 # Set to "rgba(0,0,0,0)" to export figures with a transparent background.
 BACKGROUND = "white"
-FIRST_MODEL_YEAR = 1900
+FIRST_MODEL_YEAR = 1880
 LAST_HISTORICAL_YEAR = 2023
+# Region resolution of the model runs the figures are built from: "h12" or "gtap155".
+# Results are aggregated to H12 (and AGG_REGIONS) for plotting.
+REGION_MAPPING = "h12"
 REGIONMAPPING_CSV = Path("scritps_figures/h12.csv")
+# Files mapping iso countries to the regions of each supported REGION_MAPPING.
+MODEL_REGIONMAPPING_CSVS = {
+    "h12": REGIONMAPPING_CSV,
+    "gtap155": Path("data_in/piam_mappings/regional/regionmappingGTAP12custom.csv"),
+}
+MODEL_REGIONMAPPING_CSV = MODEL_REGIONMAPPING_CSVS[REGION_MAPPING]
 
 # Cumulative-value marker years for figure 8 (absolute panel only)
 CUMULATIVE_MARKER_YEARS = [2050,]
@@ -19,8 +28,6 @@ CUMULATIVE_MARKER_YEAR_HISTORICAL = 1990
 # (figures 7 and 8), so both figures render the same annotation the same way.
 CE_SHADE = 0.55
 
-CEMENT_PICKLENAME = "figs_cement_SSP2_h12/model.pickle"
-SOURCE_PICKLE = PATH_CEMENT / CEMENT_PICKLENAME
 
 # Masks
 CEMENT_MASK = {"k": "cement"}
@@ -203,17 +210,28 @@ COLORS_REMIND = {
 
 COLOR_PALETTE = COLOR_PALETTE_1
 
+SCENARIOS = ["SSP1", "SSP2", "SSP3", "SSP4", "SSP5", "SSP1_CE", "SSP2_CE"]
+
+# Scenario of the single-scenario figures (4, 5).
+MAIN_SCENARIO = "SSP2"
+
+# Export prefixes of the reconciled and the unreconciled model runs.
+RECONCILED_PREFIX = "figs"
+UNRECONCILED_PREFIX = "figs_unreconciled"
+
 SSP_PICKLENAMES = {
-    "SSP1": "figs_cement_SSP1_h12/model.pickle",
-    "SSP2": "figs_cement_SSP2_h12/model.pickle",
-    "SSP3": "figs_cement_SSP3_h12/model.pickle",
-    "SSP4": "figs_cement_SSP4_h12/model.pickle",
-    "SSP5": "figs_cement_SSP5_h12/model.pickle",
-    "SSP1_CE": "figs_cement_SSP1_CE_h12/model.pickle",
-    "SSP2_CE": "figs_cement_SSP2_CE_h12/model.pickle",
+    ssp: f"{RECONCILED_PREFIX}_cement_{ssp}_{REGION_MAPPING}/model.pickle" for ssp in SCENARIOS
+}
+SSP_UNRECONCILED_PICKLENAMES = {
+    ssp: f"{UNRECONCILED_PREFIX}_cement_{ssp}_{REGION_MAPPING}/model.pickle" for ssp in SCENARIOS
 }
 SSP_SOURCE_PICKLES = {ssp: PATH_CEMENT / name for ssp, name in SSP_PICKLENAMES.items()}
-SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / ssp for ssp in SSP_PICKLENAMES}
+SSP_UNRECONCILED_PICKLES = {
+    ssp: PATH_CEMENT / name for ssp, name in SSP_UNRECONCILED_PICKLENAMES.items()
+}
+SSP_CACHE_DIRS = {ssp: CACHE_DIR_CEMENT / REGION_MAPPING / ssp for ssp in SCENARIOS}
+
+SOURCE_PICKLE = SSP_SOURCE_PICKLES[MAIN_SCENARIO]
 
 SSP_PALETTE = [
     pyam.plotting.PYAM_COLORS[f"AR6-{ssp}"] for ssp in ("SSP1", "SSP2", "SSP3", "SSP4", "SSP5")

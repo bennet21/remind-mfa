@@ -1,6 +1,6 @@
 """Figure 9: global cement demand stacked by aggregated region, one figure per scenario.
 
-Stacked areas show market cement demand (`helpers.cement_demand`: cement going into products
+Stacked areas show market cement demand (`helpers.ReconciledData.demand`: cement going into products
 plus construction losses, consumption-based) split over the 5 aggregated regions
 (constants.AGG_REGION_ORDER), coloured by constants.AGG_REGION_COLORS. Global only: unlike
 figures 1/2, a per-region breakdown of a single region's own demand by region doesn't make
@@ -19,19 +19,18 @@ from constants import (
     AGG_REGION_ORDER,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
-    SSP_CACHE_DIRS,
-    SSP_SOURCE_PICKLES,
+    SCENARIOS as SCENARIO_KEYS,
 )
-from helpers import aggregate_by_region, cement_demand, load_mfas
+from helpers import aggregate_by_region, load_figure_data, to_h12
 
 MT_PER_T = 1e-6
 YLABEL = "Cement demand (Mt)"
 
-# Which scenarios to plot: "all", or a list of keys from constants.SSP_SOURCE_PICKLES,
+# Which scenarios to plot: "all", or a list of keys from constants.SCENARIOS,
 # e.g. ["SSP2"].
 SCENARIOS = "all"
 
-_ALL_SCENARIOS = list(SSP_SOURCE_PICKLES.keys())
+_ALL_SCENARIOS = list(SCENARIO_KEYS)
 
 
 def selected_scenarios() -> list[str]:
@@ -91,9 +90,7 @@ def plot_global(time, demand_by_region: dict, output_name: str):
 
 def run(ssp: str):
     print(f"--- Scenario {ssp} ---")
-    combined = load_mfas(SSP_SOURCE_PICKLES[ssp], SSP_CACHE_DIRS[ssp])["combined"]
-
-    demand_arr = cement_demand(combined) * MT_PER_T
+    demand_arr = to_h12(load_figure_data(ssp).reconciled.demand) * MT_PER_T
     time = demand_arr.dims["t"].items
     region_items = np.array(demand_arr.dims["r"].items)
     demand_by_region = aggregate_by_region(demand_arr.values, region_items)
