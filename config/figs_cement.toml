@@ -12,5 +12,4 @@
 
 [cement]
     [cement.model_switches]
-        parameter_reconciliation.do_reconcile = true
-        parameter_reconciliation.do_combine_mfas = true
+        parameter_reconciliation = true
