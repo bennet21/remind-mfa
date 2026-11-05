@@ -1,9 +1,8 @@
 """File cache for the results of the cement parameter reconciliation.
 
 One cache file is kept per region mapping. It stores the log-corrections δ of the reconciled
-parameters together with a hash ("cache key") of everything the result depends on. A cached
-result is only used if the stored key equals the key of the current run; otherwise the
-reconciliation is recomputed and the file is overwritten.
+parameters together with a hash ("cache key") of everything the result depends on (see
+`ReconciliationCache`).
 """
 
 import hashlib
@@ -17,10 +16,11 @@ import flodym as fd
 import numpy as np
 
 import remind_mfa
+from remind_mfa.cement.cement_parameter_reconciliation import CementParameterReconciliation
 from remind_mfa.common.common_mfa_system import CommonMFASystem
 
 
-class ReconciliationCacheEntry(TypedDict):
+class ReconciliationCacheContent(TypedDict):
     """Content of a reconciliation cache file."""
 
     key: str
@@ -31,11 +31,6 @@ class ReconciliationCacheEntry(TypedDict):
     `CementParameterReconciliation.calc_corrected_parameters`."""
     mismatch: float
     """Final max |log(td/bu)| reached by the reconciled parameters."""
-
-
-def get_cache_path(cache_dir: str | Path, region_mapping: str) -> Path:
-    """Path of the cache file for one region mapping."""
-    return Path(cache_dir) / f"cement_reconciliation_{region_mapping}.pickle"
 
 
 def compute_cache_key(ref_mfa: CommonMFASystem, settings: dict[str, object]) -> str:
@@ -98,50 +93,134 @@ def _hash_package_source(hasher: "hashlib._Hash", package_dir: Path):
         hasher.update(source_file.read_bytes())
 
 
-def load_cache(cache_path: Path, key: str | None) -> ReconciliationCacheEntry | None:
-    """Load a cache entry if the file exists and was created with the same key.
+class ReconciliationCache:
+    """Cache file of the parameter reconciliation of one region mapping.
 
-    If `key` is None, the key is not checked and any existing cache file is loaded, as long as
-    it stores log-corrections (files of older versions stored the corrected parameters).
+    A cached result is used if it was created from the same inputs, settings and code (`key`),
+    and if the parameters corrected by its δ still reconcile the stocks. Otherwise, the
+    reconciliation has to be recomputed and the file is overwritten. With `force_use`, the δ of
+    an existing file is applied to the current input parameters without these checks (e.g. to
+    apply the reconciliation of one scenario to all scenarios); the reached mismatch is only
+    logged.
 
-    Returns:
-        The cache entry, or None if there is no usable cache.
+    Args:
+        cache_dir: Folder of the cache files, which holds one file per region mapping.
+        region_mapping: Region mapping of the current run.
+        ref_mfa: Reference MFA system that is passed to the reconciliation.
+        settings: Further arguments that influence the result (see `compute_cache_key`).
     """
-    if not cache_path.exists():
-        logging.info(f"No reconciliation cache found at {cache_path}.")
-        return None
 
-    try:
-        with open(cache_path, "rb") as file:
-            entry: ReconciliationCacheEntry = pickle.load(file)
-    except Exception as error:
-        # e.g. a file written with an incompatible version of a class
-        logging.warning(f"Could not read reconciliation cache {cache_path} ({error}).")
-        return None
+    def __init__(
+        self,
+        cache_dir: str | Path,
+        region_mapping: str,
+        ref_mfa: CommonMFASystem,
+        settings: dict[str, object],
+    ):
+        self.path = Path(cache_dir) / f"cement_reconciliation_{region_mapping}.pickle"
+        """Path of the cache file."""
+        self.key = compute_cache_key(ref_mfa, settings)
+        """Hash of the inputs, settings and code of the current run."""
 
-    if key is not None and entry["key"] != key:
-        logging.info(
-            f"Reconciliation cache at {cache_path} is outdated "
-            "(inputs, settings or code changed)."
+    def load(self, reconciliation: CementParameterReconciliation, force_use: bool) -> bool:
+        """Set the cached log-corrections δ as the result of the reconciliation (`delta`,
+        `output_prms`, `final_mismatch`), as after
+        `CementParameterReconciliation.correct_parameters`.
+
+        Args:
+            reconciliation: Reconciliation set up with the input parameters of the current run.
+            force_use: Whether to use an existing file without checking key and mismatch.
+
+        Returns:
+            Whether the cached result is used. If not, the reconciliation has to be computed.
+        """
+        cached = self._read(check_key=not force_use)
+        if cached is None:
+            return False
+
+        reconciliation.delta = cached["delta"]
+        reconciliation.output_prms = reconciliation.calc_corrected_parameters(cached["delta"])
+        mismatch = reconciliation.calc_mismatch(
+            reconciliation.output_prms,
+            label="force-used cached result" if force_use else "cached result",
         )
-        return None
+        reconciliation.final_mismatch = mismatch
 
-    if "delta" not in entry:
-        logging.info(f"Reconciliation cache at {cache_path} has an outdated format.")
-        return None
+        if force_use:
+            logging.warning(
+                f"Reusing reconciliation cache {self.path} without checking that it was created "
+                f"from the current inputs. Its corrections reach a mismatch of {mismatch:.4f} "
+                f"for the current stocks (stored: {cached['mismatch']:.4f})."
+            )
+            return True
 
-    return entry
+        # The mismatch is recomputed from scratch, so it must equal the stored one (up to
+        # rounding).
+        if mismatch <= cached["mismatch"] + 1e-9:
+            logging.info(f"Using cached reconciliation result from {self.path}.")
+            return True
+        logging.warning(
+            f"Cached reconciliation result from {self.path} does not reconcile the stocks "
+            f"(mismatch {mismatch:.4f}, expected {cached['mismatch']:.4f}). "
+            "Recomputing and overwriting the cache."
+        )
+        return False
 
+    def save(self, reconciliation: CementParameterReconciliation):
+        """Save the log-corrections δ and the mismatch of a computed reconciliation."""
+        self._write(
+            {
+                "key": self.key,
+                "delta": reconciliation.delta,
+                "mismatch": reconciliation.final_mismatch,
+            }
+        )
 
-def save_cache(cache_path: Path, entry: ReconciliationCacheEntry):
-    """Write a cache entry, replacing an existing file.
+    def _read(self, check_key: bool = True) -> ReconciliationCacheContent | None:
+        """Read the cache entry if the file exists and was created with the same key.
 
-    The entry is first written to a temporary file which then replaces the cache file in one
-    step. This way, runs started in parallel never read a half-written file.
-    """
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
-    with open(temporary_path, "wb") as file:
-        pickle.dump(entry, file)
-    os.replace(temporary_path, cache_path)
-    logging.info(f"Saved reconciliation result to cache {cache_path}.")
+        Args:
+            check_key: Whether to check the key. If False, any existing file is read, as long
+                as it stores log-corrections (files of older versions stored the corrected
+                parameters).
+
+        Returns:
+            The cache entry, or None if there is no usable cache.
+        """
+        if not self.path.exists():
+            logging.info(f"No reconciliation cache found at {self.path}.")
+            return None
+
+        try:
+            with open(self.path, "rb") as file:
+                entry: ReconciliationCacheContent = pickle.load(file)
+        except Exception as error:
+            # e.g. a file written with an incompatible version of a class
+            logging.warning(f"Could not read reconciliation cache {self.path} ({error}).")
+            return None
+
+        if check_key and entry["key"] != self.key:
+            logging.info(
+                f"Reconciliation cache at {self.path} is outdated "
+                "(inputs, settings or code changed)."
+            )
+            return None
+
+        if "delta" not in entry:
+            logging.info(f"Reconciliation cache at {self.path} has an outdated format.")
+            return None
+
+        return entry
+
+    def _write(self, entry: ReconciliationCacheContent):
+        """Write a cache entry, replacing an existing file.
+
+        The entry is first written to a temporary file which then replaces the cache file in
+        one step. This way, runs started in parallel never read a half-written file.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        with open(temporary_path, "wb") as file:
+            pickle.dump(entry, file)
+        os.replace(temporary_path, self.path)
+        logging.info(f"Saved reconciliation result to cache {self.path}.")
