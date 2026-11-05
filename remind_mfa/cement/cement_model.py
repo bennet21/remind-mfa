@@ -403,10 +403,8 @@ class CementModel(CommonModel[CementCfg]):
     ):
         """Reconcile parameters between top-down and bottom-up stocks.
 
-        The resulting log-corrections δ are cached in `<export.path>/cache/`, one file per
-        region mapping. The cache is used if it was created from the same inputs, settings and
-        code, and if the parameters corrected by its δ still reconcile the stocks. Otherwise,
-        the reconciliation is recomputed and the cache is overwritten.
+        The result is taken from the cache if possible (see `load_reconciliation_cache`).
+        Otherwise, it is computed and saved to the cache.
 
         Args:
             max_iter: Maximum number of correction iterations.
@@ -428,46 +426,19 @@ class CementModel(CommonModel[CementCfg]):
             cache_dir=Path(self.cfg.export.path) / "cache",
             region_mapping=self.cfg.input.region_mapping,
         )
+        settings = {"max_iter": max_iter, "tol_r": tol_r, "tol_step": tol_step}
         cache_key = compute_cache_key(
-            ref_mfa,
-            settings={
-                "max_iter": max_iter,
-                "tol_r": tol_r,
-                "tol_step": tol_step,
-                "output_dims_are_independent": True,
-            },
+            ref_mfa, settings={**settings, "output_dims_are_independent": True}
         )
-        cached = load_cache(cache_path, cache_key)
-
-        if cached is not None:
-            # Double-check that the cached corrections still reconcile the stocks. The mismatch
-            # is recomputed from scratch, so it must equal the stored one (up to rounding).
-            parameters = self.parameter_reconciliation.calc_corrected_parameters(cached["delta"])
-            mismatch = self.parameter_reconciliation.calc_mismatch(
-                parameters, label="cached result"
-            )
-            if mismatch <= cached["mismatch"] + 1e-9:
-                logging.info(f"Using cached reconciliation result from {cache_path}.")
-                self.parameter_reconciliation.delta = cached["delta"]
-                self.parameter_reconciliation.output_prms = parameters
-                self.parameter_reconciliation.final_mismatch = mismatch
-                self.parameters = parameters
-                return
-            logging.warning(
-                f"Cached reconciliation result from {cache_path} does not reconcile the stocks "
-                f"(mismatch {mismatch:.4f}, expected {cached['mismatch']:.4f}). "
-                "Recomputing and overwriting the cache."
-            )
+        if self.load_reconciliation_cache(cache_path, cache_key):
+            self.parameters = self.parameter_reconciliation.output_prms
+            return
 
         logging.info(
             f"Starting parameter reconciliation (max_iter={max_iter}, tol_r={tol_r}, "
             f"tol_step={tol_step})..."
         )
-        self.parameters = self.parameter_reconciliation.correct_parameters(
-            max_iter=max_iter,
-            tol_r=tol_r,
-            tol_step=tol_step,
-        )
+        self.parameters = self.parameter_reconciliation.correct_parameters(**settings)
         save_cache(
             cache_path,
             {
@@ -476,3 +447,56 @@ class CementModel(CommonModel[CementCfg]):
                 "mismatch": self.parameter_reconciliation.final_mismatch,
             },
         )
+
+    def load_reconciliation_cache(self, cache_path: Path, cache_key: str) -> bool:
+        """Set the cached log-corrections δ as the result of the parameter reconciliation, as
+        after `CementParameterReconciliation.correct_parameters`.
+
+        There is one cache file per region mapping. It is used if it was created from the same
+        inputs, settings and code (`cache_key`), and if the parameters corrected by its δ still
+        reconcile the stocks. With the model switch `force_use_reconciliation_cache`, the δ of an
+        existing cache file is applied to the current input parameters without these checks
+        (e.g. to apply the reconciliation of one scenario to all scenarios); the reached
+        mismatch is only logged, and the file is not overwritten.
+
+        Args:
+            cache_path: Path of the cache file.
+            cache_key: Hash of the inputs, settings and code of the current run.
+
+        Returns:
+            Whether the cached result is used. If not, the reconciliation has to be computed
+            and the cache overwritten.
+        """
+        force_use_cache = self.cfg.model_switches.force_use_reconciliation_cache
+        cached = load_cache(cache_path, None if force_use_cache else cache_key)
+        if cached is None:
+            return False
+
+        reconciliation = self.parameter_reconciliation
+        reconciliation.delta = cached["delta"]
+        reconciliation.output_prms = reconciliation.calc_corrected_parameters(cached["delta"])
+        mismatch = reconciliation.calc_mismatch(
+            reconciliation.output_prms,
+            label="force-used cached result" if force_use_cache else "cached result",
+        )
+        reconciliation.final_mismatch = mismatch
+
+        if force_use_cache:
+            logging.warning(
+                f"Reusing reconciliation cache {cache_path} without checking that it was created "
+                f"from the current inputs. Its corrections reach a mismatch of {mismatch:.4f} "
+                f"for the current stocks (stored: {cached['mismatch']:.4f})."
+            )
+            return True
+
+        # The mismatch is recomputed from scratch, so it must equal the stored one (up to
+        # rounding).
+        if mismatch <= cached["mismatch"] + 1e-9:
+            logging.info(f"Using cached reconciliation result from {cache_path}.")
+            return True
+        logging.warning(
+            f"Cached reconciliation result from {cache_path} does not reconcile the stocks "
+            f"(mismatch {mismatch:.4f}, expected {cached['mismatch']:.4f}). "
+            "Recomputing and overwriting the cache."
+        )
+        return False

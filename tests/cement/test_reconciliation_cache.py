@@ -61,3 +61,18 @@ def test_save_and_load_cache(tmp_path):
     save_cache(cache_path, {"key": "other", "delta": delta, "mismatch": 0.02})
     assert load_cache(cache_path, key="abc") is None
     assert list(cache_path.parent.iterdir()) == [cache_path]
+
+
+def test_load_cache_without_key_check(tmp_path):
+    """Without a key, any cache file is loaded, except files of the old format without delta."""
+    cache_path = get_cache_path(tmp_path / "cache", region_mapping="h12")
+    delta = {"floorspace": make_ref_mfa().parameters["floorspace"].apply(np.log)}
+
+    save_cache(cache_path, {"key": "abc", "delta": delta, "mismatch": 0.01})
+    entry = load_cache(cache_path, key=None)
+    assert entry is not None
+    assert entry["key"] == "abc"
+
+    old_entry = {"key": "abc", "parameters": make_ref_mfa().parameters, "mismatch": 0.01}
+    save_cache(cache_path, old_entry)
+    assert load_cache(cache_path, key=None) is None

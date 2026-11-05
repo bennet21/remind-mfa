@@ -98,8 +98,11 @@ def _hash_package_source(hasher: "hashlib._Hash", package_dir: Path):
         hasher.update(source_file.read_bytes())
 
 
-def load_cache(cache_path: Path, key: str) -> ReconciliationCacheEntry | None:
+def load_cache(cache_path: Path, key: str | None) -> ReconciliationCacheEntry | None:
     """Load a cache entry if the file exists and was created with the same key.
+
+    If `key` is None, the key is not checked and any existing cache file is loaded, as long as
+    it stores log-corrections (files of older versions stored the corrected parameters).
 
     Returns:
         The cache entry, or None if there is no usable cache.
@@ -116,11 +119,15 @@ def load_cache(cache_path: Path, key: str) -> ReconciliationCacheEntry | None:
         logging.warning(f"Could not read reconciliation cache {cache_path} ({error}).")
         return None
 
-    if entry["key"] != key:
+    if key is not None and entry["key"] != key:
         logging.info(
             f"Reconciliation cache at {cache_path} is outdated "
             "(inputs, settings or code changed)."
         )
+        return None
+
+    if "delta" not in entry:
+        logging.info(f"Reconciliation cache at {cache_path} has an outdated format.")
         return None
 
     return entry
