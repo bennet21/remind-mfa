@@ -163,6 +163,7 @@ class CorrectionRow:
 
     label: str
     prm_name: str
+    item: str
     regions: list[str]
     sigma: np.ndarray
     z: np.ndarray
@@ -202,6 +203,9 @@ def correction_rows(corrections: dict[str, ParameterCorrection]) -> list[Correct
                 CorrectionRow(
                     label=f"{PARAMETER_DISPLAY_NAMES[prm_name]} {items}".strip(),
                     prm_name=prm_name,
+                    item=ITEM_SEPARATOR.join(
+                        item_label(letter, item) for letter, item in slicer.items()
+                    ),
                     regions=regions,
                     sigma=sigma_values,
                     z=delta_values / sigma_values,
@@ -400,6 +404,49 @@ def add_direct_labels(
         )
 
 
+def add_parameter_labels(
+    fig: go.Figure, rows: list[CorrectionRow], y_positions: list[float], plot_width: float
+):
+    """Parameter names left of the item tick labels of the y-axis, with a square bracket that
+    spans the rows of each parameter with more than one row.
+
+    Args:
+        plot_width: Width of the plot area in pixels, to convert pixel offsets from the y-axis
+            into paper coordinates.
+    """
+    bracket_x = -PARAMETER_BRACKET_OFFSET / plot_width
+    bracket_end_x = bracket_x + PARAMETER_BRACKET_END / plot_width
+    name_x = bracket_x - PARAMETER_NAME_GAP / plot_width
+
+    groups: dict[str, list[float]] = {}
+    for row, y_position in zip(rows, y_positions):
+        groups.setdefault(row.prm_name, []).append(y_position)
+    for prm_name, group_y_positions in groups.items():
+        top = max(group_y_positions) + PARAMETER_BRACKET_OVERHANG
+        bottom = min(group_y_positions) - PARAMETER_BRACKET_OVERHANG
+        if len(group_y_positions) > 1:
+            fig.add_shape(
+                type="path",
+                path=(
+                    f"M {bracket_end_x},{top} L {bracket_x},{top} "
+                    f"L {bracket_x},{bottom} L {bracket_end_x},{bottom}"
+                ),
+                xref="paper",
+                yref="y",
+                line={"color": "black", "width": 0.8},
+            )
+        fig.add_annotation(
+            x=name_x,
+            y=float(np.mean(group_y_positions)),
+            xref="paper",
+            yref="y",
+            text=PARAMETER_DISPLAY_NAMES[prm_name],
+            xanchor="right",
+            showarrow=False,
+            font={"size": 12},
+        )
+
+
 def plot_corrections(
     rows: list[CorrectionRow],
     point_series: list[PointSeries],
@@ -558,9 +605,10 @@ def plot_corrections(
     )
     fig.update_yaxes(
         tickvals=y_positions,
-        ticktext=[row.label for row in rows],
-        tickfont={"size": 12},
+        ticktext=[row.item for row in rows],
+        tickfont={"size": 11},
         showgrid=False,
+        automargin=False,
         range=y_range,
         zeroline=False,
     )
@@ -575,9 +623,10 @@ def plot_corrections(
             "tracegroupgap": 14,
             "itemsizing": "constant",
         },
-        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        margin={"l": LEFT_MARGIN, "r": 10, "t": 10, "b": 10},
     )
     width = 1350 if show_standardized else 900
+    add_parameter_labels(fig, rows, y_positions, plot_width=width - LEFT_MARGIN - 10)
     save(fig, output_name, width=width, height=90 + 19 * (len(y_positions) + 2))
 
 
@@ -596,6 +645,17 @@ PARAMETER_DISPLAY_NAMES = {
     "cement_loss_rate": "Cement loss rate",
 }
 PARAMETER_ORDER = list(PARAMETER_DISPLAY_NAMES)
+# Separator of the items of several dimensions in the tick labels (e.g. "RS · C").
+ITEM_SEPARATOR = " · "
+# Left margin of the figure, holding item tick labels, brackets and parameter names, and the
+# horizontal offsets of the brackets from the y-axis, their end ticks and the gap to the
+# parameter names, in pixels.
+LEFT_MARGIN = 250
+PARAMETER_BRACKET_OFFSET = 62
+PARAMETER_BRACKET_END = 5
+PARAMETER_NAME_GAP = 6
+# Vertical overhang of the brackets beyond the first and last row of a parameter, in row heights.
+PARAMETER_BRACKET_OVERHANG = 0.35
 # Items with |δ| below this value in all regions are not shown.
 MIN_ABS_DELTA = 1e-9
 # Vertical gap between parameters, jitter of the country points and vertical spread of the
