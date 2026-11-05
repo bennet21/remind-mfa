@@ -345,6 +345,61 @@ def aggregated_point_series(
     return series
 
 
+def add_direct_labels(
+    fig: go.Figure,
+    rows: list[CorrectionRow],
+    y_positions: list[float],
+    xref: str,
+    show_violins: bool,
+    show_box: bool,
+):
+    """Label the uncertainty bands, the violins and the boxes directly in the change-factor
+    panel (replaces a legend). Each label is placed in an empty area of the plot, with an arrow
+    to an example in a row of `DIRECT_LABELS`."""
+    rows_by_label = {row.label: (row, y) for row, y in zip(rows, y_positions)}
+
+    def target_x(kind: str, row: CorrectionRow) -> float:
+        """Change factor the arrow of a label points to."""
+        sigma_min, sigma_max = float(np.min(row.sigma)), float(np.max(row.sigma))
+        match kind:
+            case "band":
+                return float(np.exp(0.7 * sigma_min))
+            case "band_range":
+                return float(np.exp(0.5 * (sigma_min + sigma_max)))
+            case "violin":
+                return float(np.nanpercentile(row.change_factor, DIRECT_LABEL_VIOLIN_PERCENTILE))
+            case _:
+                return float(np.nanmedian(row.change_factor))
+
+    shown = {"band", "band_range"} | ({"violin"} if show_violins else set())
+    shown |= {"box"} if show_box else set()
+    for kind, (row_label, text, text_x, text_dy, target_dy) in DIRECT_LABELS.items():
+        if kind not in shown:
+            continue
+        row, y_position = rows_by_label[row_label]
+        text = text.format(n_regions=len(row.regions))
+        fig.add_annotation(
+            x=np.log10(target_x(kind, row)),
+            y=y_position + target_dy,
+            xref=xref,
+            yref="y",
+            ax=np.log10(text_x),
+            ay=y_position + text_dy,
+            axref=xref,
+            ayref="y",
+            text=text,
+            xanchor="left",
+            align="left",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=0.8,
+            arrowwidth=0.8,
+            arrowcolor="black",
+            standoff=1,
+            font={"size": 11},
+        )
+
+
 def plot_corrections(
     rows: list[CorrectionRow],
     point_series: list[PointSeries],
@@ -444,45 +499,7 @@ def plot_corrections(
                     col=col,
                 )
 
-    # legend entries of the bands and violins
-    legend_entries = [
-        ("bands", "Prior uncertainty", BAND_LABELS[name], color, color)
-        for name, color in BAND_COLORS.items()
-    ]
-    if show_violins:
-        distribution_title = f"All {len(rows[0].regions)} regions"
-        legend_entries.append(
-            ("distribution", distribution_title, "Distribution", "white", VIOLIN_LINE_COLOR)
-        )
-        if show_box:
-            legend_entries.append(
-                (
-                    "distribution",
-                    distribution_title,
-                    "Interquartile range<br>and median",
-                    VIOLIN_BOX_COLOR,
-                    VIOLIN_BOX_COLOR,
-                )
-            )
-    for group, group_title, name, color, line_color in legend_entries:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                name=name,
-                legendgroup=group,
-                legendgrouptitle={"text": group_title},
-                marker={
-                    "size": 14,
-                    "symbol": "square",
-                    "color": color,
-                    "line": {"color": line_color, "width": 1},
-                },
-            ),
-            row=1,
-            col=change_factor_col,
-        )
+    add_direct_labels(fig, rows, y_positions, change_factor_xref, show_violins, show_box)
 
     for series in point_series:
         for col, attribute in panels:
@@ -550,6 +567,7 @@ def plot_corrections(
     fig.update_layout(
         template="plotly_white",
         font={"color": "black"},
+        showlegend=bool(point_series),
         legend={
             "font": {"size": 12},
             "grouptitlefont": {"size": 13},
@@ -559,7 +577,7 @@ def plot_corrections(
         },
         margin={"l": 10, "r": 10, "t": 10, "b": 10},
     )
-    width = 1350 if show_standardized else 950
+    width = 1350 if show_standardized else 900
     save(fig, output_name, width=width, height=90 + 19 * (len(y_positions) + 2))
 
 
@@ -589,10 +607,23 @@ AGG_POINT_SPREAD = 0.24
 BAND_HALF_HEIGHT = 0.4
 # Colors of the uncertainty bands, drawn from outside to inside.
 BAND_COLORS = {"1σ range": "#e3e3e3", "1σ": "#c8c8c8"}
-BAND_LABELS = {
-    "1σ range": "exp(±σ), range of σ<br>across regions",
-    "1σ": "exp(±σ)",
+# Direct labels (replacing a legend): row of the example, text, change factor of the left edge of
+# the text, and vertical offsets of the text and of the arrow tip from the row, in row heights.
+# The texts lie in empty areas of the plot, away from their example, so that the arrows are steep.
+DIRECT_LABELS = {
+    "box": ("Floor space per capita Com", "Interquartile range<br>and median", 1.7, -2.6, 0.0),
+    "band": ("Structure split RS M", "Prior uncertainty<br>exp(±σ)", 1.5, -2.0, -0.3),
+    "band_range": (
+        "Concrete intensity RS S",
+        "Range of exp(±σ)<br>across regions",
+        1.8,
+        2.5,
+        0.3,
+    ),
+    "violin": ("End-use split Com", "Distribution over<br>all {n_regions} regions", 0.35, 3.1, 0.3),
 }
+# Percentile of the values of the example row the arrow of the violin label points to.
+DIRECT_LABEL_VIOLIN_PERCENTILE = 10
 # Candidate ticks of the change-factor axis; those within the axis range are shown.
 CHANGE_FACTOR_TICKS = [0.25, 0.33, 0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3, 4]
 VIOLIN_FILL_COLOR = "rgba(255,255,255,0.75)"
@@ -606,7 +637,7 @@ SHOW_STANDARDIZED = False
 SHOW_VIOLINS = True
 # Points drawn on top: "aggregated" (stock-weighted mean of each aggregated region),
 # "largest" (the N_LARGEST_REGIONS regions with the largest top-down stock) or "none".
-POINTS = "aggregated"
+POINTS = "none"
 N_LARGEST_REGIONS = 30
 
 
