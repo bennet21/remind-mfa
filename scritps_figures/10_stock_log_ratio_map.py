@@ -1,8 +1,8 @@
 """Figure 10: world map of the log ratio of the top-down to the bottom-up in-use cement stock.
 
 Each country is shaded by ln(TD / BU) of its model region in the last historical year, before
-the reconciliation. Both stocks are the cement contained in concrete of residential and commercial
-buildings, as in figure 4:
+the reconciliation. Both stocks are the concrete (product mass) in residential and commercial
+buildings, the quantity compared by the reconciliation:
 - top-down: in-use stock of the model run without reconciliation
 - bottom-up: stock computed from floorspace with the pre-reconciliation parameters
 Positive values (red) mean that the top-down stock is larger, negative values (blue) that the
@@ -30,7 +30,6 @@ from constants import (
 from helpers import load_figure_data
 
 H = LAST_HISTORICAL_YEAR
-CEMENT_CONCRETE = {"k": "cement", "m": "concrete"}
 
 # Region level of the map, independent of constants.REGION_MAPPING.
 REGION_MAPPING_FIG10 = "gtap155"
@@ -63,8 +62,9 @@ STOCK_TYPE_TITLES = {
 }
 
 data = load_figure_data(MAIN_SCENARIO, region_mapping=REGION_MAPPING_FIG10)
-td_stock = data.unreconciled.stock[{"t": H, **CEMENT_CONCRETE}]
-bu_stock = data.reconciled.bu_stock
+# product mass: sum of cement and non-cement constituents
+td_stock = data.unreconciled.stock[{"t": H, "m": "concrete"}].sum_over("k")
+bu_stock = data.reconciled.bu_concrete_stock
 
 
 def sum_items(array, letter: str, items: list[str]):
@@ -164,7 +164,7 @@ def plot_map(stock_type: str, output_name: str):
             colorbar={
                 "title": {
                     "text": f"ln(TD / BU), {STOCK_TYPE_TITLES[stock_type]}<br>"
-                    f"cement in concrete stock {H}",
+                    f"concrete stock {H}",
                     "font": {"size": 13},
                 },
                 "tickvals": list(range(n_bins)),

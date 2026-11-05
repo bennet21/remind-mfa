@@ -94,6 +94,8 @@ class ReconciledData:
         population: Population, dims (t, r).
         bu_stock: Pre-reconciliation bottom-up cement-in-concrete stock in the last historical
             year, incl. unoccupied residential stock, dims (r, b).
+        bu_concrete_stock: Pre-reconciliation bottom-up concrete stock (product mass) in the
+            last historical year, incl. unoccupied residential stock, dims (r, b).
     """
 
     inflow: fd.FlodymArray
@@ -102,6 +104,7 @@ class ReconciledData:
     emissions: fd.FlodymArray
     population: fd.FlodymArray
     bu_stock: fd.FlodymArray
+    bu_concrete_stock: fd.FlodymArray
 
 
 @dataclass
@@ -172,8 +175,8 @@ def read_emission_parameters(model) -> dict[str, fd.Parameter]:
     return parameters
 
 
-def bottom_up_cement_stock(model) -> fd.FlodymArray:
-    """Pre-reconciliation bottom-up cement-in-concrete stock in the last historical year,
+def bottom_up_concrete_stock(model) -> fd.FlodymArray:
+    """Pre-reconciliation bottom-up concrete stock (product mass) in the last historical year,
     dims (r, b).
 
     Computed from the input parameters of the reconciliation, in the same way as the bottom-up
@@ -186,8 +189,14 @@ def bottom_up_cement_stock(model) -> fd.FlodymArray:
     reconciliation = model.parameter_reconciliation
     # reduced to the reconciliation year (last historical year)
     prm = reconciliation.reduce_prms(reconciliation.input_prms)
-    concrete = BU.concrete_from_floorspace(BU.calc_gross_floorspace(prm), prm).sum_to(("r", "b"))
-    return concrete * prm["cement_ratio"][{"m": "Concrete"}]
+    return BU.concrete_from_floorspace(BU.calc_gross_floorspace(prm), prm).sum_to(("r", "b"))
+
+
+def bottom_up_cement_stock(model) -> fd.FlodymArray:
+    """Pre-reconciliation bottom-up cement-in-concrete stock in the last historical year,
+    dims (r, b)."""
+    cement_ratio = model.parameter_reconciliation.input_prms["cement_ratio"]
+    return bottom_up_concrete_stock(model) * cement_ratio[{"m": "Concrete"}]
 
 
 def extract_reconciled(model) -> ReconciledData:
@@ -202,6 +211,7 @@ def extract_reconciled(model) -> ReconciledData:
         emissions=process_emissions(demand, prm),
         population=prm["population"].sum_to(("t", "r")),
         bu_stock=with_short_item_names(bottom_up_cement_stock(model)),
+        bu_concrete_stock=with_short_item_names(bottom_up_concrete_stock(model)),
     )
 
 
