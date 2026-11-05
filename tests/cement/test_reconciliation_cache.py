@@ -43,21 +43,21 @@ def test_cache_key_changes_with_inputs_and_settings():
 
 def test_save_and_load_cache(tmp_path):
     cache_path = get_cache_path(tmp_path / "cache", region_mapping="h12")
-    parameters = make_ref_mfa().parameters
+    delta = {"floorspace": make_ref_mfa().parameters["floorspace"].apply(np.log)}
 
     assert load_cache(cache_path, key="abc") is None  # no file yet
 
-    save_cache(cache_path, {"key": "abc", "parameters": parameters, "mismatch": 0.01})
+    save_cache(cache_path, {"key": "abc", "delta": delta, "mismatch": 0.01})
     entry = load_cache(cache_path, key="abc")
     assert entry is not None
     assert entry["mismatch"] == 0.01
     np.testing.assert_array_equal(
-        entry["parameters"]["floorspace"].values, parameters["floorspace"].values
+        entry["delta"]["floorspace"].values, delta["floorspace"].values
     )
 
     assert load_cache(cache_path, key="other") is None  # outdated key
 
     # saving again overwrites the single file of this region mapping
-    save_cache(cache_path, {"key": "other", "parameters": parameters, "mismatch": 0.02})
+    save_cache(cache_path, {"key": "other", "delta": delta, "mismatch": 0.02})
     assert load_cache(cache_path, key="abc") is None
     assert list(cache_path.parent.iterdir()) == [cache_path]

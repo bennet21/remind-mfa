@@ -403,10 +403,10 @@ class CementModel(CommonModel[CementCfg]):
     ):
         """Reconcile parameters between top-down and bottom-up stocks.
 
-        The result is cached in `<export.path>/cache/`, one file per region mapping. The cache
-        is used if it was created from the same inputs, settings and code, and if its parameters
-        still reconcile the stocks. Otherwise, the reconciliation is recomputed and the cache
-        is overwritten.
+        The resulting log-corrections δ are cached in `<export.path>/cache/`, one file per
+        region mapping. The cache is used if it was created from the same inputs, settings and
+        code, and if the parameters corrected by its δ still reconcile the stocks. Otherwise,
+        the reconciliation is recomputed and the cache is overwritten.
 
         Args:
             max_iter: Maximum number of correction iterations.
@@ -418,7 +418,7 @@ class CementModel(CommonModel[CementCfg]):
             self.historical_mfa.trade_set
         )  # trade is not altered during reconciliation, so we can just take it from the already computed historical MFA
 
-        # always created (also when using the cache), as it is needed to check the cached result
+        # always created (also when using the cache), as it applies and checks the cached result
         self.parameter_reconciliation = CementParameterReconciliation(
             ref_mfa=ref_mfa,
             output_dims_are_independent=True,
@@ -440,16 +440,18 @@ class CementModel(CommonModel[CementCfg]):
         cached = load_cache(cache_path, cache_key)
 
         if cached is not None:
-            # Double-check that the cached parameters still reconcile the stocks. The mismatch
+            # Double-check that the cached corrections still reconcile the stocks. The mismatch
             # is recomputed from scratch, so it must equal the stored one (up to rounding).
+            parameters = self.parameter_reconciliation.calc_corrected_parameters(cached["delta"])
             mismatch = self.parameter_reconciliation.calc_mismatch(
-                cached["parameters"], label="cached result"
+                parameters, label="cached result"
             )
             if mismatch <= cached["mismatch"] + 1e-9:
                 logging.info(f"Using cached reconciliation result from {cache_path}.")
-                self.parameter_reconciliation.output_prms = cached["parameters"]
+                self.parameter_reconciliation.delta = cached["delta"]
+                self.parameter_reconciliation.output_prms = parameters
                 self.parameter_reconciliation.final_mismatch = mismatch
-                self.parameters = cached["parameters"]
+                self.parameters = parameters
                 return
             logging.warning(
                 f"Cached reconciliation result from {cache_path} does not reconcile the stocks "
@@ -470,7 +472,7 @@ class CementModel(CommonModel[CementCfg]):
             cache_path,
             {
                 "key": cache_key,
-                "parameters": self.parameters,
+                "delta": self.parameter_reconciliation.delta,
                 "mismatch": self.parameter_reconciliation.final_mismatch,
             },
         )

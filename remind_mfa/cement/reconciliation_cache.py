@@ -1,9 +1,9 @@
 """File cache for the results of the cement parameter reconciliation.
 
-One cache file is kept per region mapping. It stores the reconciled parameters together with
-a hash ("cache key") of everything the result depends on. A cached result is only used if the
-stored key equals the key of the current run; otherwise the reconciliation is recomputed and
-the file is overwritten.
+One cache file is kept per region mapping. It stores the log-corrections δ of the reconciled
+parameters together with a hash ("cache key") of everything the result depends on. A cached
+result is only used if the stored key equals the key of the current run; otherwise the
+reconciliation is recomputed and the file is overwritten.
 """
 
 import hashlib
@@ -25,8 +25,10 @@ class ReconciliationCacheEntry(TypedDict):
 
     key: str
     """Hash of all inputs, settings and source code the result depends on."""
-    parameters: dict[str, fd.Parameter]
-    """Reconciled parameters, as returned by `CementParameterReconciliation.correct_parameters`."""
+    delta: dict[str, fd.FlodymArray]
+    """Log-corrections δ of the reconciled parameters, as stored in
+    `CementParameterReconciliation.delta`. The parameters are rebuilt from them with
+    `CementParameterReconciliation.calc_corrected_parameters`."""
     mismatch: float
     """Final max |log(td/bu)| reached by the reconciled parameters."""
 
@@ -42,7 +44,7 @@ def compute_cache_key(ref_mfa: CommonMFASystem, settings: dict[str, object]) -> 
     The key changes if any of the following changes:
         - the values and dimensions of the input parameters and the trade of `ref_mfa`
           (the flows and stocks of `ref_mfa` are still empty at this point, so they are skipped)
-        - the reconciliation settings (e.g. `max_iter`, `tol`)
+        - the reconciliation settings (e.g. `max_iter`, `tol_r`, `tol_step`)
         - any source file of `remind_mfa` or `flodym`
 
     Hashing the whole source code is deliberately conservative: also unrelated code changes
