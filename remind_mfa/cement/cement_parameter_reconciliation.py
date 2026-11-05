@@ -75,8 +75,8 @@ class CementParameterReconciliation:
           (Industrial/Civil Engineering, Mortar): they enter through the shares of the
           reconciled items.
         - The reconciled stock functions see all splits only as shares, so their norm does not
-          matter during the reconciliation. The returned splits are re-normalized once to sum to
-          1 (see `normalize_split`).
+          matter during the reconciliation. The splits are re-normalized to sum to 1 whenever
+          the corrections are applied (see `calc_corrected_parameters`).
     """
 
     _normalization_dims: dict[str, str] = {
@@ -188,6 +188,10 @@ class CementParameterReconciliation:
             tol_r: Convergence tolerance of the residual ``max_j |r⁽ⁿ⁾_j|``.
             tol_step: Convergence tolerance of the step ``max_p,k |δ⁽ⁿ⁺¹⁾ - δ⁽ⁿ⁾|``.
 
+        The final log-corrections δ* are stored in `delta` (one FlodymArray per corrected
+        parameter, over `prms_adj_dims`). The corrected parameters can be rebuilt from them with
+        `calc_corrected_parameters`.
+
         Returns:
             The corrected parameters in their original dimensions.
         """
@@ -219,21 +223,45 @@ class CementParameterReconciliation:
             )
 
             delta = new_delta
-            corrected_prms = self.apply_corrections(delta)
+            corrected_prms = self.calc_corrected_parameters(self.delta_to_fd(delta))
 
             if max_abs_residual < tol_r and max_step < tol_step:
                 logging.info(f"Reconciliation converged after {n + 1} iteration(s).")
                 break
         else:
-            # not converged: report the residual reached by the last applied corrections
-            self.prms = self.reduce_prms(corrected_prms)
-            self.residual_logging(*self.evaluate_residual(), label="final")
             logging.warning(f"Reconciliation did not converge in {max_iter} iterations.")
 
+        self.delta = self.delta_to_fd(delta)
+        self.output_prms = corrected_prms
+        # report the residual reached by the final parameters
+        self.final_mismatch = self.calc_mismatch(self.output_prms, label="final")
+        return self.output_prms
+
+    def calc_mismatch(self, source_prms: dict[str, fd.Parameter], label: str) -> float:
+        """Max |r| reached by the given parameters (in their original dimensions).
+
+        Also sets them as working parameters."""
+        self.prms = self.reduce_prms(source_prms)
+        return self.residual_logging(*self.evaluate_residual(), label=label)
+
+    def calc_corrected_parameters(
+        self, delta: dict[str, fd.FlodymArray]
+    ) -> dict[str, fd.Parameter]:
+        """Input parameters (in their original dimensions) scaled by the correction factors,
+        θ'_p = θ_p exp(δ_p), with the splits re-normalized (see `normalize_split`).
+
+        Used in each iteration and to rebuild the corrected parameters from a stored `delta`.
+
+        Args:
+            delta: Log-corrections δ_p over `prms_adj_dims[p]`, e.g. as stored in `delta`.
+                Parameters not in `delta` are returned uncorrected.
+        """
+        corrected_prms = deepcopy(self.input_prms)
+        for prm_name, delta_p in delta.items():
+            corrected_prms[prm_name][...] = corrected_prms[prm_name] * delta_p.apply(np.exp)
         for prm_name, dim_name in self._normalization_dims.items():
             self.normalize_split(corrected_prms[prm_name], dim_name)
-        self.output_prms = corrected_prms
-        return self.output_prms
+        return corrected_prms
 
     def evaluate_residual(self) -> tuple[fd.FlodymArray, fd.FlodymArray, fd.FlodymArray]:
         """Residual r and stocks S_TD, S_BU at the current working parameters."""
@@ -536,14 +564,12 @@ class CementParameterReconciliation:
             objective += float(np.sum(delta_p[uncertain] ** 2 / variances[uncertain]))
         return objective
 
-    def apply_corrections(self, delta: dict[str, np.ndarray]) -> dict[str, fd.Parameter]:
-        """Input parameters (in their original dimensions) scaled by the correction factors,
-        θ'_p = θ_p exp(δ_p)."""
-        corrected_prms = deepcopy(self.input_prms)
-        for prm_name, delta_p in delta.items():
-            factor = self.reshape_np_to_fd(np.exp(delta_p), self.prms_adj_dims[prm_name])
-            corrected_prms[prm_name][...] = corrected_prms[prm_name] * factor
-        return corrected_prms
+    def delta_to_fd(self, delta: dict[str, np.ndarray]) -> dict[str, fd.FlodymArray]:
+        """Flattened log-corrections δ_p reshaped to FlodymArrays over `prms_adj_dims[p]`."""
+        return {
+            prm_name: self.reshape_np_to_fd(delta_p, self.prms_adj_dims[prm_name])
+            for prm_name, delta_p in delta.items()
+        }
 
     def calc_variances(self, prm_name: str, is_top_down: bool) -> np.ndarray:
         """Flattened variances σ_p,k² = ln(1 + v_p,k²) S_r / S_k of the log-corrections of a
@@ -629,7 +655,7 @@ class CementParameterReconciliation:
 
     @staticmethod
     def normalize_split(split: fd.Parameter, dim_name: str):
-        """Renormalize a returned split parameter in place, proportionally so it sums to 1
+        """Renormalize a corrected split parameter in place, proportionally so it sums to 1
         along its split dimension `dim_name`.
 
         The corrections multiply the items of a split by different factors, so the stored
