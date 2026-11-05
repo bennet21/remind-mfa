@@ -8,10 +8,12 @@ from pathlib import Path
 import flodym as fd
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 from constants import (
     AGG_REGION_ORDER,
     AGG_REGIONS,
+    LAST_HISTORICAL_YEAR,
     MODEL_REGIONMAPPING_CSVS,
     REGION_MAPPING,
     REGIONMAPPING_CSV,
@@ -71,6 +73,27 @@ def shade(base_hex: str, t: float) -> str:
     amount = abs(t)
     out = tuple(round(c + (tc - c) * amount) for c, tc in zip(rgb, target))
     return f"rgb({out[0]},{out[1]},{out[2]})"
+
+
+def add_last_historical_line(
+    fig: go.Figure, label: bool = False, row: int | None = None, col: int | None = None
+):
+    """Dashed vertical line at the last historical year, optionally labelled on its left."""
+    kwargs = {"row": row, "col": col} if row is not None else {}
+    if label:
+        kwargs |= {
+            "annotation_text": "Last historical year",
+            "annotation_position": "top left",
+            "annotation_font": {"size": 11, "color": "black"},
+        }
+    fig.add_vline(
+        x=LAST_HISTORICAL_YEAR,
+        line_color="black",
+        line_dash="dash",
+        line_width=1,
+        opacity=0.7,
+        **kwargs,
+    )
 
 
 def shade_levels(n: int) -> list[float]:

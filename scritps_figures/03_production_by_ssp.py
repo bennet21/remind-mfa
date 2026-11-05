@@ -1,9 +1,10 @@
 """Figure 3: cement production under SSP1-5 plus the two circular-economy (CE) variants.
 
 Line plot comparing total (or per-region) cement production from the top-down MFA
-for the five SSP scenarios and the SSP1_CE / SSP2_CE circular-economy variants
-(drawn dashed in their parent SSP colour). A vertical dashed line marks the last
-historical year (2023). Produces a global figure and a 12-panel regional figure.
+for the five SSP scenarios and the Ambitious / Pragmatic Circularity variants of SSP1 / SSP2
+(drawn dashed in their parent SSP colour, with a light band between each SSP and its
+circularity variant). A vertical dashed line marks the last
+historical year. Produces a global figure and a 12-panel regional figure.
 
 Run from the repository root:
     uv run python scritps_figures/03_production_by_ssp.py
@@ -12,12 +13,13 @@ Run from the repository root:
 import math
 
 import plotly.graph_objects as go
+from plotly.colors import hex_to_rgb
 from plotly.subplots import make_subplots
 
 from constants import (
     BACKGROUND,
     FIGURES_DIR,
-    LAST_HISTORICAL_YEAR,
+    FIRST_PLOT_YEAR,
     REGION_DISPLAY_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
@@ -26,9 +28,10 @@ from constants import (
     SSP_DASHES,
     SSP_LABELS,
 )
-from helpers import load_figure_data, to_h12
+from helpers import add_last_historical_line, load_figure_data, to_h12
 
 MT_PER_T = 1e-6
+BAND_OPACITY = 0.15
 YLABEL = "Cement production (Mt)"
 SSPS = list(SCENARIOS)
 
@@ -54,8 +57,34 @@ def production(combined, region=None):
     return result
 
 
+def add_ce_bands(fig, region=None, kwargs=None):
+    """Light band between each SSP and its circularity variant, in the SSP colour."""
+    for ssp in SSPS:
+        ce_ssp = f"{ssp}_CE"
+        if ce_ssp not in combined_by_ssp:
+            continue
+        base = production(combined_by_ssp[ssp], region=region).values
+        ce = production(combined_by_ssp[ce_ssp], region=region).values
+        red, green, blue = hex_to_rgb(SSP_COLORS[ssp])
+        fig.add_trace(
+            go.Scatter(
+                x=[*time, *time[::-1]],
+                y=[*base, *ce[::-1]],
+                mode="lines",
+                fill="toself",
+                fillcolor=f"rgba({red},{green},{blue},{BAND_OPACITY})",
+                line={"width": 0},
+                hoverinfo="skip",
+                legendgroup=ce_ssp,
+                showlegend=False,
+            ),
+            **kwargs,
+        )
+
+
 def add_ssp_traces(fig, region=None, showlegend=True, row=None, col=None):
     kwargs = {"row": row, "col": col} if row is not None else {}
+    add_ce_bands(fig, region=region, kwargs=kwargs)
     for ssp in SSPS:
         fig.add_trace(
             go.Scatter(
@@ -82,13 +111,7 @@ def save(fig, output_name: str, width: int, height: int):
 def plot_global(output_name: str):
     fig = go.Figure()
     add_ssp_traces(fig)
-    fig.add_vline(
-        x=LAST_HISTORICAL_YEAR,
-        line_color="black",
-        line_dash="dash",
-        line_width=1,
-        opacity=0.7,
-    )
+    add_last_historical_line(fig, label=True)
     fig.update_layout(
         xaxis_title="Year",
         yaxis_title=YLABEL,
@@ -98,7 +121,7 @@ def plot_global(output_name: str):
         legend={"font": {"size": 11}},
         margin={"l": 90, "r": 30},
     )
-    fig.update_xaxes(title_font_size=15)
+    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)], title_font_size=15)
     fig.update_yaxes(title_font_size=15)
     save(fig, output_name, width=1050, height=620)
 
@@ -121,15 +144,7 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
         row = index // ncols + 1
         col = index % ncols + 1
         add_ssp_traces(fig, region=region, showlegend=(index == 0), row=row, col=col)
-        fig.add_vline(
-            x=LAST_HISTORICAL_YEAR,
-            line_color="black",
-            line_dash="dash",
-            line_width=1,
-            opacity=0.7,
-            row=row,
-            col=col,
-        )
+        add_last_historical_line(fig, label=region is None, row=row, col=col)
         fig.update_yaxes(showgrid=True, row=row, col=col)
 
     if include_world:
@@ -146,6 +161,8 @@ def plot_regional(output_name: str, region_items, display_names, ncols: int, inc
             row=1,
             col=1,
         )
+
+    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)])
 
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13}
@@ -208,30 +225,14 @@ def plot_combined(output_name: str, region_items, display_names, ncols_regional:
     )
 
     add_ssp_traces(fig, region=None, showlegend=True, row=1, col=1)
-    fig.add_vline(
-        x=LAST_HISTORICAL_YEAR,
-        line_color="black",
-        line_dash="dash",
-        line_width=1,
-        opacity=0.7,
-        row=1,
-        col=1,
-    )
+    add_last_historical_line(fig, label=True, row=1, col=1)
     fig.update_yaxes(showgrid=True, row=1, col=1)
 
     for index, region in enumerate(region_items):
         row = index // ncols_regional + 1
         col = index % ncols_regional + 2
         add_ssp_traces(fig, region=region, showlegend=False, row=row, col=col)
-        fig.add_vline(
-            x=LAST_HISTORICAL_YEAR,
-            line_color="black",
-            line_dash="dash",
-            line_width=1,
-            opacity=0.7,
-            row=row,
-            col=col,
-        )
+        add_last_historical_line(fig, row=row, col=col)
         fig.update_yaxes(showgrid=True, row=row, col=col)
 
     for annotation in fig.layout.annotations:

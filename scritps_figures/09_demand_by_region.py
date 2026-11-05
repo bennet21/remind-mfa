@@ -18,10 +18,10 @@ from constants import (
     AGG_REGION_COLORS,
     AGG_REGION_ORDER,
     FIGURES_DIR,
-    LAST_HISTORICAL_YEAR,
+    FIRST_PLOT_YEAR,
     SCENARIOS as SCENARIO_KEYS,
 )
-from helpers import aggregate_by_region, load_figure_data, to_h12
+from helpers import add_last_historical_line, aggregate_by_region, load_figure_data, to_h12
 
 MT_PER_T = 1e-6
 YLABEL = "Cement demand (Mt)"
@@ -66,13 +66,7 @@ def plot_global(time, demand_by_region: dict, output_name: str):
             )
         )
 
-    fig.add_vline(
-        x=LAST_HISTORICAL_YEAR,
-        line_color="black",
-        line_dash="dash",
-        line_width=1,
-        opacity=0.7,
-    )
+    add_last_historical_line(fig, label=True)
     fig.update_layout(
         xaxis_title="Year",
         yaxis_title=YLABEL,
@@ -82,7 +76,7 @@ def plot_global(time, demand_by_region: dict, output_name: str):
         legend={"font": {"size": 11}},
         margin={"l": 90, "r": 30},
     )
-    fig.update_xaxes(title_font_size=15)
+    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)], title_font_size=15)
     fig.update_yaxes(title_font_size=15)
 
     save(fig, output_name, width=1050, height=620)

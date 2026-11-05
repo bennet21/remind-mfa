@@ -8,7 +8,9 @@ FIGURES_DIR = Path("data/cement/output/figures")
 # Set to "rgba(0,0,0,0)" to export figures with a transparent background.
 BACKGROUND = "white"
 FIRST_MODEL_YEAR = 1880
-LAST_HISTORICAL_YEAR = 2023
+LAST_HISTORICAL_YEAR = 2025
+# First year shown on the time axes.
+FIRST_PLOT_YEAR = 1950
 # Region resolution of the model runs the figures are built from: "h12" or "gtap155".
 # Results are aggregated to H12 (and AGG_REGIONS) for plotting.
 REGION_MAPPING = "h12"
@@ -250,5 +252,8 @@ SSP_COLORS.update(
 # Line-dash style per scenario: CE variants dashed, base SSPs solid.
 SSP_DASHES = {ssp: ("dash" if ssp.endswith("_CE") else "solid") for ssp in SCENARIOS}
 
-# Legend labels (CE variants read as "SSPx (CE)").
-SSP_LABELS = {ssp: (f"{ssp[:-3]} (CE)" if ssp.endswith("_CE") else ssp) for ssp in SCENARIOS}
+# Legend labels; the CE variants carry descriptive names.
+SSP_LABELS = {ssp: ssp for ssp in SCENARIOS} | {
+    "SSP1_CE": "Ambitious Circularity",
+    "SSP2_CE": "Pragmatic Circularity",
+}

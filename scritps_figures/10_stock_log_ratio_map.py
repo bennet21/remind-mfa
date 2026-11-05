@@ -6,7 +6,8 @@ buildings, the quantity compared by the reconciliation:
 - top-down: in-use stock of the model run without reconciliation
 - bottom-up: stock computed from floorspace with the pre-reconciliation parameters
 Positive values (red) mean that the top-down stock is larger, negative values (blue) that the
-bottom-up stock is larger. Values are grouped into symmetric bins. Three maps are produced:
+bottom-up stock is larger. Values are grouped into bins whose edges are factors of TD / BU and
+their reciprocals (e.g. 2 and 1/2), i.e. symmetric in ln. Three maps are produced:
 residential + commercial, residential only and commercial only.
 
 Uses the scenario MAIN_SCENARIO on the region level REGION_MAPPING_FIG10 (generate its data with
@@ -34,8 +35,17 @@ H = LAST_HISTORICAL_YEAR
 # Region level of the map, independent of constants.REGION_MAPPING.
 REGION_MAPPING_FIG10 = "gtap155"
 
-# Inner bin edges of ln(TD / BU), symmetric around zero. The outer bins are open.
-BIN_EDGES = [-1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0]
+# Inner bin edges as factors of TD / BU above 1; their reciprocals are the edges below 1. The
+# outer bins are open.
+FACTOR_EDGES = [1.25, 1.5, 2, 3]
+FACTOR_EDGE_LABELS = [
+    *[f"1/{factor:g}" for factor in reversed(FACTOR_EDGES)],
+    *[f"{factor:g}" for factor in FACTOR_EDGES],
+]
+# Inner bin edges of ln(TD / BU), symmetric around zero.
+BIN_EDGES = [-np.log(factor) for factor in reversed(FACTOR_EDGES)] + [
+    np.log(factor) for factor in FACTOR_EDGES
+]
 # Diverging colors, one per bin (blue: BU larger, grey: about equal, red: TD larger).
 BIN_COLORS = [
     "#2166ac",
@@ -86,18 +96,11 @@ def log_ratio(stock_type: str) -> dict[str, float]:
 
 
 def bin_labels() -> list[str]:
-    """Legend labels of the bins: ln range and the corresponding TD / BU factor range."""
-    edges = [-np.inf, *BIN_EDGES, np.inf]
-    labels = []
-    for lower, upper in zip(edges[:-1], edges[1:]):
-        if np.isinf(lower):
-            labels.append(f"< {upper:g}  (TD/BU < {np.exp(upper):.2f})")
-        elif np.isinf(upper):
-            labels.append(f"> {lower:g}  (TD/BU > {np.exp(lower):.2f})")
-        else:
-            labels.append(
-                f"{lower:g} to {upper:g}  ({np.exp(lower):.2f} to {np.exp(upper):.2f})"
-            )
+    """Legend labels of the bins as TD / BU factor ranges."""
+    labels = [f"< {FACTOR_EDGE_LABELS[0]}"]
+    for lower, upper in zip(FACTOR_EDGE_LABELS[:-1], FACTOR_EDGE_LABELS[1:]):
+        labels.append(f"{lower} to {upper}")
+    labels.append(f"> {FACTOR_EDGE_LABELS[-1]}")
     return labels
 
 
@@ -143,10 +146,12 @@ def plot_map(stock_type: str, output_name: str):
     countries = country_table(region_values)
 
     values = np.array(list(region_values.values()))
+    in_center_bin = np.abs(values) < np.log(FACTOR_EDGES[0])
     print(
-        f"ln(TD/BU), {STOCK_TYPE_TITLES[stock_type]}: median {np.median(values):.2f}, "
-        f"min {values.min():.2f}, max {values.max():.2f}, "
-        f"|ln| < 0.1 in {np.mean(np.abs(values) < 0.1):.0%} of {len(values)} regions"
+        f"TD/BU, {STOCK_TYPE_TITLES[stock_type]}: median {np.exp(np.median(values)):.2f}, "
+        f"min {np.exp(values.min()):.2f}, max {np.exp(values.max()):.2f}, "
+        f"within 1/{FACTOR_EDGES[0]:g} to {FACTOR_EDGES[0]:g} in {np.mean(in_center_bin):.0%} "
+        f"of {len(values)} regions"
     )
 
     n_bins = len(BIN_COLORS)
@@ -163,7 +168,7 @@ def plot_map(stock_type: str, output_name: str):
             marker_line_width=0.3,
             colorbar={
                 "title": {
-                    "text": f"ln(TD / BU), {STOCK_TYPE_TITLES[stock_type]}<br>"
+                    "text": f"TD / BU, {STOCK_TYPE_TITLES[stock_type]}<br>"
                     f"concrete stock {H}",
                     "font": {"size": 13},
                 },

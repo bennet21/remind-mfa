@@ -21,7 +21,7 @@ from constants import (
     BACKGROUND,
     SCENARIOS as SCENARIO_KEYS,
     FIGURES_DIR,
-    LAST_HISTORICAL_YEAR,
+    FIRST_PLOT_YEAR,
     REGION_DISPLAY_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
@@ -37,7 +37,7 @@ from constants import (
     OTHER_RES_COM_MORTAR_NAME,
     COLOR_PALETTE,
 )
-from helpers import load_figure_data, shade, shade_levels, to_h12
+from helpers import add_last_historical_line, load_figure_data, shade, shade_levels, to_h12
 
 MT_PER_T = 1e-6
 TD_LINE_COLOR = "#222222"
@@ -184,13 +184,7 @@ def plot_global(combined, td, time, series, output_name: str):
         )
     )
 
-    fig.add_vline(
-        x=LAST_HISTORICAL_YEAR,
-        line_color="black",
-        line_dash="dash",
-        line_width=1,
-        opacity=0.7,
-    )
+    add_last_historical_line(fig, label=True)
     fig.update_layout(
         xaxis_title="Year",
         yaxis_title=YLABEL,
@@ -200,7 +194,7 @@ def plot_global(combined, td, time, series, output_name: str):
         legend={"font": {"size": 11}, "tracegroupgap": 4, "groupclick": "toggleitem"},
         margin={"l": 90, "r": 30},
     )
-    fig.update_xaxes(title_font_size=15)
+    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)], title_font_size=15)
     fig.update_yaxes(title_font_size=15)
 
     save(fig, output_name, width=1050, height=620)
@@ -262,15 +256,7 @@ def plot_regional(
             col=col,
         )
 
-        fig.add_vline(
-            x=LAST_HISTORICAL_YEAR,
-            line_color="black",
-            line_dash="dash",
-            line_width=1,
-            opacity=0.7,
-            row=row,
-            col=col,
-        )
+        add_last_historical_line(fig, label=region is None, row=row, col=col)
         fig.update_yaxes(showgrid=True, row=row, col=col)
 
     if include_world:
@@ -287,6 +273,8 @@ def plot_regional(
             row=1,
             col=1,
         )
+
+    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)])
 
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13}
