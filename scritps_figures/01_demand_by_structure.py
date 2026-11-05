@@ -3,9 +3,9 @@
 Stacked areas show the reconciled (combined) cement demand split over the building-structure
 dimension (`s`: Concrete / Masonry / Timber / Steel), with each structure further subdivided over
 the end-use dimension (`e`: single-family res. / multi-family res. / commercial) via
-shading. A separate grey "Other" band holds non-building (industrial + civil) cement. On top, a
-black line shows the pre-reconciliation top-down total cement demand. Produces a global figure and
-a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`, once per scenario in
+shading. Grey bands on top hold the cement not split by structure (mortar, industrial, civil
+engineering); they are labelled directly in the world panel. Instead of a plotly legend, a
+structure x use colour key for the building bands is drawn below the plot area. Produces a global figure and a 12-panel regional figure, saved as PNGs in `data/cement/output/figures`, once per scenario in
 `SCENARIOS` (output filenames are suffixed with the scenario name).
 
 Run from the repository root:
@@ -25,7 +25,6 @@ from constants import (
     REGION_DISPLAY_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
-    STRUCTURE_DISPLAY_NAMES,
     FUNCTION_DISPLAY_NAMES,
     STRUCTURE_BASE_COLORS,
     OTHER_STRUCTURE_KEYS,
@@ -40,9 +39,13 @@ from constants import (
 from helpers import add_last_historical_line, load_figure_data, shade, shade_levels, to_h12
 
 MT_PER_T = 1e-6
-TD_LINE_COLOR = "#222222"
-TD_LINE_NAME = "Top-down demand (pre-reconciliation)"
 YLABEL = "Cement demand (Mt)"
+
+# Short labels for the colour key; its axis titles ("Structure", "Use") provide the context.
+KEY_STRUCTURE_LABELS = {"C": "Concrete", "M": "Masonry", "T": "Timber", "S": "Steel"}
+KEY_FUNCTION_LABELS = {"RS": "Single-family", "RM": "Multi-family", "Com": "Commercial"}
+# Year at which the grey bands are labelled in the world panel.
+BAND_LABEL_YEAR = 2075
 
 # Which scenarios to plot: "all", or a list of keys from constants.SCENARIOS,
 # e.g. ["SSP2"].
@@ -65,35 +68,29 @@ def build_series(buildings, functions) -> list[dict]:
     series = []
 
     levels = shade_levels(len(functions))
-    structure_legend_ranks = {"S": 10, "T": 20, "M": 30, "C": 40}
     for b in buildings:
         base = STRUCTURE_BASE_COLORS.get(str(b), COLOR_PALETTE[0])
-        structure_name = STRUCTURE_DISPLAY_NAMES.get(str(b), str(b))
-        struct_rank = structure_legend_ranks.get(str(b), 100)
         for f, t in zip(functions, levels):
             series.append(
                 {
                     "selections": [{"s": b, "e": f}],
                     "color": shade(base, t),
                     "name": FUNCTION_DISPLAY_NAMES.get(str(f), str(f)),
-                    "group": str(b),
-                    "grouptitle": structure_name,
-                    "legendrank": struct_rank,
+                    "structure": str(b),
+                    "function": str(f),
                 }
             )
 
     # Three grey sub-categories for non-building cement, stacked on top.
-    series.append({"selections": [{"e": "Ind"}], "color": OTHER_IND_COLOR,
-                   "name": OTHER_IND_NAME, "group": "other", "grouptitle": "Other cement use",
-                   "legendrank": 2})
-    series.append({"selections": [{"e": "Civ"}], "color": OTHER_CIV_COLOR,
-                   "name": OTHER_CIV_NAME, "group": "other", "grouptitle": None,
-                   "legendrank": 2})
+    # Mortar first, so it sits directly above the residential/commercial building bands.
     series.append({"selections": [{"m": "mortar", "e": "RS"}, {"m": "mortar", "e": "RM"},
                                   {"m": "mortar", "e": "Com"}],
                    "color": OTHER_RES_COM_MORTAR_COLOR,
-                   "name": OTHER_RES_COM_MORTAR_NAME, "group": "other", "grouptitle": None,
-                   "legendrank": 2})
+                   "name": OTHER_RES_COM_MORTAR_NAME, "structure": None, "function": None})
+    series.append({"selections": [{"e": "Ind"}], "color": OTHER_IND_COLOR,
+                   "name": OTHER_IND_NAME, "structure": None, "function": "Ind"})
+    series.append({"selections": [{"e": "Civ"}], "color": OTHER_CIV_COLOR,
+                   "name": OTHER_CIV_NAME, "structure": None, "function": "Civ"})
 
     return series
 
@@ -120,26 +117,142 @@ def demand(combined, selections, region=None):
     return result
 
 
-def td_demand(td, selection: dict):
-    """Pre-reconciliation top-down total cement demand (Mt) summed to time.
+class ColourKey:
+    """Structure x use colour grid of the building bands, drawn below the plot area.
 
-    `td` is the unreconciled in-use inflow of new material, aggregated to H12."""
-    region = selection.get("r")
-    region_items = [
-        source_region
-        for source_region, aggregate_region in AGG_REGIONS.items()
-        if aggregate_region == region
-    ] or [region]
-    result = None
-    for source_region in region_items:
-        filter_dict = {"k": "cement", **selection}
-        if source_region is not None:
-            filter_dict["r"] = source_region
-        else:
-            filter_dict.pop("r", None)
-        arr = td[filter_dict].sum_to("t") * MT_PER_T
-        result = arr if result is None else result + arr
-    return result
+    Rows mirror the stacking order (top of the stack first). The layout is defined in pixels and
+    converted to paper coordinates, so the key keeps its size across figure sizes.
+    """
+
+    CELL_WIDTH = 125
+    CELL_HEIGHT = 22
+    GAP = 3
+    LINE_HEIGHT = 24
+    ROW_LABEL_WIDTH = 82
+    AXIS_TITLE_WIDTH = 28
+    TOP_OFFSET = 70  # below the plot area, leaving room for the x-axis title
+
+    def __init__(self, series: list[dict], font_size: int = 15):
+        self.font_size = font_size
+        buildings = [s for s in series if s["structure"] is not None]
+        self.colors = {(s["structure"], s["function"]): s["color"] for s in buildings}
+        self.structures = list(dict.fromkeys(s["structure"] for s in buildings))[::-1]
+        self.functions = list(dict.fromkeys(s["function"] for s in buildings))
+
+    def height(self) -> float:
+        """Vertical extent below the plot area in pixels."""
+        return (self.TOP_OFFSET + 2 * self.LINE_HEIGHT
+                + len(self.structures) * (self.CELL_HEIGHT + self.GAP))
+
+    def _width(self) -> float:
+        n_cols = len(self.functions)
+        return (self.AXIS_TITLE_WIDTH + self.ROW_LABEL_WIDTH + n_cols * self.CELL_WIDTH
+                + (n_cols - 1) * self.GAP)
+
+    def _col_left(self, col: int) -> float:
+        return self.grid_left + col * (self.CELL_WIDTH + self.GAP)
+
+    def _row_top(self, row: int) -> float:
+        return self.grid_top + row * (self.CELL_HEIGHT + self.GAP)
+
+    def _x(self, pixels: float) -> float:
+        return 0.5 + pixels / self.plot_width
+
+    def _y(self, pixels: float) -> float:
+        return -pixels / self.plot_height
+
+    def _text(self, fig: go.Figure, text: str, x: float, y: float, xanchor: str, yanchor: str,
+              bold: bool = False, angle: float = 0):
+        fig.add_annotation(
+            text=f"<b>{text}</b>" if bold else text,
+            xref="paper", yref="paper",
+            x=self._x(x), y=self._y(y),
+            xanchor=xanchor, yanchor=yanchor,
+            textangle=angle,
+            showarrow=False,
+            font={"size": self.font_size, "color": "black"},
+        )
+
+    def add_to(self, fig: go.Figure, plot_width: int, plot_height: int):
+        """Draw the key, horizontally centred below a plot area of the given size (px)."""
+        self.plot_width = plot_width
+        self.plot_height = plot_height
+        left = -self._width() / 2
+        self.grid_left = left + self.AXIS_TITLE_WIDTH + self.ROW_LABEL_WIDTH
+        self.grid_top = self.TOP_OFFSET + 2 * self.LINE_HEIGHT
+        grid_right = self._col_left(len(self.functions) - 1) + self.CELL_WIDTH
+        grid_bottom = self._row_top(len(self.structures) - 1) + self.CELL_HEIGHT
+
+        self._text(fig, "Use", (self.grid_left + grid_right) / 2, self.TOP_OFFSET,
+                   "center", "top", bold=True)
+        for col, function in enumerate(self.functions):
+            self._text(fig, KEY_FUNCTION_LABELS.get(function, function),
+                       self._col_left(col) + self.CELL_WIDTH / 2, self.grid_top - 2,
+                       "center", "bottom")
+        self._text(fig, "Structure", left + self.AXIS_TITLE_WIDTH / 2,
+                   (self.grid_top + grid_bottom) / 2, "center", "middle", bold=True, angle=-90)
+
+        for row, structure in enumerate(self.structures):
+            self._text(fig, KEY_STRUCTURE_LABELS.get(structure, structure), self.grid_left - 8,
+                       self._row_top(row) + self.CELL_HEIGHT / 2, "right", "middle")
+            for col, function in enumerate(self.functions):
+                fig.add_shape(
+                    type="rect",
+                    xref="paper", yref="paper",
+                    x0=self._x(self._col_left(col)),
+                    x1=self._x(self._col_left(col) + self.CELL_WIDTH),
+                    y0=self._y(self._row_top(row) + self.CELL_HEIGHT),
+                    y1=self._y(self._row_top(row)),
+                    fillcolor=self.colors[(structure, function)],
+                    line={"width": 0},
+                )
+
+
+def label_unsplit_bands(fig: go.Figure, time, series: list[dict], stack_values: list,
+                        row: int | None = None, col: int | None = None):
+    """Name the bands not split by structure inside the stack at `BAND_LABEL_YEAR`.
+
+    `stack_values` holds the plotted values of each series, in stacking order.
+    """
+    kwargs = {"row": row, "col": col} if row is not None else {}
+    year_index = list(time).index(BAND_LABEL_YEAR)
+    band_bottom = 0.0
+    for s, values in zip(series, stack_values):
+        band_top = band_bottom + values[year_index]
+        if s["structure"] is None:
+            fig.add_annotation(
+                text=s["name"], x=BAND_LABEL_YEAR, y=(band_bottom + band_top) / 2,
+                xanchor="center", yanchor="middle", showarrow=False,
+                font={"size": 13, "color": "black"}, **kwargs,
+            )
+        band_bottom = band_top
+
+
+def add_brace(fig: go.Figure, row: int, col: int, y_bottom: float, y_top: float, label: str):
+    """Curly brace right of a subplot spanning `y_bottom`..`y_top` (data units), with a label.
+
+    x is given in domain units of the subplot (1 = right edge), y in data units.
+    """
+    left, width = 1.015, 0.03
+    middle_x = left + width / 2
+    tip_x = left + width
+    y_middle = (y_bottom + y_top) / 2
+    corner = 0.12 * (y_top - y_bottom) / 2
+    path = (
+        f"M {left},{y_bottom} Q {middle_x},{y_bottom} {middle_x},{y_bottom + corner} "
+        f"L {middle_x},{y_middle - corner} Q {middle_x},{y_middle} {tip_x},{y_middle} "
+        f"Q {middle_x},{y_middle} {middle_x},{y_middle + corner} "
+        f"L {middle_x},{y_top - corner} Q {middle_x},{y_top} {left},{y_top}"
+    )
+    fig.add_shape(
+        type="path", path=path, xref="x domain", yref="y",
+        line={"color": "black", "width": 1.2}, row=row, col=col,
+    )
+    fig.add_annotation(
+        text=label, x=tip_x + 0.01, y=y_middle, xref="x domain", yref="y",
+        xanchor="left", yanchor="middle", showarrow=False,
+        font={"size": 14, "color": "black"}, row=row, col=col,
+    )
 
 
 def save(fig, output_name: str, width: int, height: int):
@@ -150,58 +263,47 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot_global(combined, td, time, series, output_name: str):
+def plot_global(combined, time, series, output_name: str):
     fig = go.Figure()
 
-    for s in series:
+    stack_values = [demand(combined, s["selections"]).values for s in series]
+    for s, values in zip(series, stack_values):
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=demand(combined, s["selections"]).values,
+                y=values,
                 mode="lines",
                 stackgroup="struct",
                 line={"color": s["color"], "width": 0.3},
                 fillcolor=s["color"],
                 name=s["name"],
-                legendgroup=s["group"],
-                legendgrouptitle_text=s["grouptitle"],
-                legendrank=s["legendrank"],
             )
         )
 
-    # Draw the top-down line last so it stays visible on top of the stacked fills. Because the
-    # combined demand decomposition sums to the same total as the top-down demand, this line
-    # traces the top of the stack.
-    fig.add_trace(
-        go.Scatter(
-            x=time,
-            y=td_demand(td, {}).values,
-            mode="lines",
-            line={"color": TD_LINE_COLOR, "width": 2},
-            name=TD_LINE_NAME,
-            legendgroup="td",
-            legendrank=1,
-        )
-    )
-
-    add_last_historical_line(fig, label=True)
+    add_last_historical_line(fig)
+    label_unsplit_bands(fig, time, series, stack_values)
+    key = ColourKey(series)
+    plot_width, plot_height = 930, 500
+    margin = {"t": 50, "l": 90, "b": round(key.height()) + 20, "r": 30}
     fig.update_layout(
         xaxis_title="Year",
         yaxis_title=YLABEL,
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend={"font": {"size": 11}, "tracegroupgap": 4, "groupclick": "toggleitem"},
-        margin={"l": 90, "r": 30},
+        showlegend=False,
+        margin=margin,
     )
     fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)], title_font_size=15)
     fig.update_yaxes(title_font_size=15)
+    key.add_to(fig, plot_width, plot_height)
 
-    save(fig, output_name, width=1050, height=620)
+    save(fig, output_name, width=plot_width + margin["l"] + margin["r"],
+         height=plot_height + margin["t"] + margin["b"])
 
 
 def plot_regional(
-    combined, td, time, series, output_name: str, region_items, display_names, ncols: int,
+    combined, time, series, output_name: str, region_items, display_names, ncols: int,
     include_world=False,
 ):
     plot_regions = [None, *region_items] if include_world else list(region_items)
@@ -216,48 +318,44 @@ def plot_regional(
         vertical_spacing=0.12,
         horizontal_spacing=0.06,
     )
+    # only the subplot titles exist at this point
+    fig.update_annotations(font_size=18)
 
     for index, region in enumerate(plot_regions):
         row = index // ncols + 1
         col = index % ncols + 1
 
-        for s in series:
+        stack_values = [demand(combined, s["selections"], region=region).values for s in series]
+        bottom_up_top = 0.0
+        total_top = 0.0
+        for s, values in zip(series, stack_values):
             fig.add_trace(
                 go.Scatter(
                     x=time,
-                    y=demand(combined, s["selections"], region=region).values,
+                    y=values,
                     mode="lines",
                     stackgroup=f"struct{index}",  # isolate stacking per panel
                     line={"color": s["color"], "width": 0.3},
                     fillcolor=s["color"],
                     name=s["name"],
-                    legendgroup=s["group"],
-                    legendgrouptitle_text=s["grouptitle"],
-                    legendrank=s["legendrank"],
-                    showlegend=index == 0,
                 ),
                 row=row,
                 col=col,
             )
+            total_top += values[-1]
+            if s["structure"] is not None:
+                bottom_up_top += values[-1]
 
-        # top-down line last so it stays on top of the stacked fills
-        fig.add_trace(
-            go.Scatter(
-                x=time,
-                y=td_demand(td, {"r": region}).values,
-                mode="lines",
-                line={"color": TD_LINE_COLOR, "width": 1.5},
-                name=TD_LINE_NAME,
-                legendgroup="td",
-                legendrank=1,
-                showlegend=index == 0,
-            ),
-            row=row,
-            col=col,
-        )
-
-        add_last_historical_line(fig, label=region is None, row=row, col=col)
+        add_last_historical_line(fig, row=row, col=col)
         fig.update_yaxes(showgrid=True, row=row, col=col)
+        if region is None:
+            label_unsplit_bands(fig, time, series, stack_values, row=row, col=col)
+
+        # braces at the last year in the rightmost panels, where the right margin leaves space
+        if col == ncols:
+            gap = 0.01 * total_top
+            add_brace(fig, row, col, 0, bottom_up_top - gap, "Bottom-up")
+            add_brace(fig, row, col, bottom_up_top + gap, total_top, "Top-down")
 
     if include_world:
         fig.add_shape(
@@ -276,22 +374,15 @@ def plot_regional(
 
     fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)])
 
-    for annotation in fig.layout.annotations:
-        annotation.font = {"size": 13}
-
+    key = ColourKey(series)
+    plot_width, plot_height = 1475, 670
+    margin = {"t": 70, "l": 95, "b": round(key.height()) + 20, "r": 130}
     fig.update_layout(
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend={
-            "x": 1.01,
-            "xanchor": "left",
-            "y": 0.5,
-            "yanchor": "middle",
-            "font": {"size": 12},
-            "tracegroupgap": 6,
-        },
-        margin={"t": 70, "l": 95, "b": 60, "r": 220},
+        showlegend=False,
+        margin=margin,
         annotations=list(fig.layout.annotations)
         + [
             dict(
@@ -304,7 +395,8 @@ def plot_regional(
             ),
             dict(
                 text=YLABEL,
-                x=-0.065, y=0.5,
+                x=0, y=0.5,
+                xshift=-80,
                 xref="paper", yref="paper",
                 showarrow=False,
                 xanchor="center", yanchor="middle",
@@ -313,15 +405,16 @@ def plot_regional(
             ),
         ],
     )
+    key.add_to(fig, plot_width, plot_height)
 
-    save(fig, output_name, width=1700, height=800)
+    save(fig, output_name, width=plot_width + margin["l"] + margin["r"],
+         height=plot_height + margin["t"] + margin["b"])
 
 
 def run(ssp: str):
     print(f"--- Scenario {ssp} ---")
     data = load_figure_data(ssp)
     combined = to_h12(data.reconciled.inflow)
-    td = to_h12(data.unreconciled.inflow)
 
     time = combined.dims["t"].items
     regions = combined.dims["r"].items
@@ -333,13 +426,13 @@ def run(ssp: str):
 
     series = build_series(buildings, functions)
 
-    plot_global(combined, td, time, series, f"fig1_demand_by_structure_global_{ssp}")
+    plot_global(combined, time, series, f"fig1_demand_by_structure_global_{ssp}")
     plot_regional(
-        combined, td, time, series, f"fig1_demand_by_structure_h12_{ssp}",
+        combined, time, series, f"fig1_demand_by_structure_h12_{ssp}",
         regions, REGION_DISPLAY_NAMES, ncols=4,
     )
     plot_regional(
-        combined, td, time, series, f"fig1_demand_by_structure_agg_{ssp}",
+        combined, time, series, f"fig1_demand_by_structure_agg_{ssp}",
         AGG_REGION_ORDER, {}, ncols=3, include_world=True,
     )
 

@@ -29,6 +29,8 @@ class ModelSwitches(RemindMFABaseModel):
 
     scenario: str
     """Name of the scenario to use."""
+    scenario_parameter_subset: list[str] | None = None
+    """If given, only the rows of the selected scenario that set one of these parameters are applied, while its parent scenarios are applied in full."""
     stock_extrapolation_class_name: str
     """Class name of the extrapolation subclass to use for stock extrapolation."""
     lifetime_model_name: str

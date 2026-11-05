@@ -52,9 +52,9 @@ OTHER_STRUCTURE_KEYS = {"U"}
 
 # Three grey shades for the Other sub-categories (darkest -> lightest), kept close together
 # so they recede visually relative to the saturated building-use colors.
-OTHER_IND_COLOR = "#8a8a8a"
-OTHER_CIV_COLOR = "#a4a4a4"
-OTHER_RES_COM_MORTAR_COLOR = "#bebebe"
+OTHER_RES_COM_MORTAR_COLOR = "#8a8a8a"
+OTHER_IND_COLOR = "#a4a4a4"
+OTHER_CIV_COLOR = "#bebebe"
 
 OTHER_IND_NAME = "Industrial buildings"
 OTHER_CIV_NAME = "Civil engineering"
@@ -213,6 +213,7 @@ COLORS_REMIND = {
 COLOR_PALETTE = COLOR_PALETTE_1
 
 SCENARIOS = ["SSP1", "SSP2", "SSP3", "SSP4", "SSP5", "SSP1_CE", "SSP2_CE"]
+CE_SCENARIOS = [ssp for ssp in SCENARIOS if ssp.endswith("_CE")]
 
 # Scenario of the single-scenario figures (4, 5).
 MAIN_SCENARIO = "SSP2"

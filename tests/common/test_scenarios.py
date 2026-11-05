@@ -143,3 +143,34 @@ def test_scenario_reader_skips_inactive_parameters(tmp_path):
 
     with pytest.raises(ValueError, match="undefined scenario parameter 'module_share'"):
         make_reader(set()).get_parameters()
+
+
+def test_scenario_reader_applies_parameter_subset_of_selected_scenario(tmp_path):
+    scenarios_path = tmp_path / "scenarios"
+    scenarios_path.mkdir()
+    (scenarios_path / "inheritance.csv").write_text(
+        "scenario,parent,\nBASE,\nCHILD,BASE\n", encoding="utf-8"
+    )
+    (scenarios_path / "BASE.csv").write_text(
+        "parameter,models,value,extra,index,description\nshare,all,1.0,,,\nfactor,all,1.0,,,\n",
+        encoding="utf-8",
+    )
+    (scenarios_path / "CHILD.csv").write_text(
+        "parameter,models,value,extra,index,description\nshare,all,2.0,,,\nfactor,all,2.0,,,\n",
+        encoding="utf-8",
+    )
+    dims = fd.DimensionSet(dim_list=[fd.Dimension(name="Region", letter="r", items=EU21_REGIONS)])
+    reader = ScenarioReader(
+        name="CHILD",
+        base_path=str(scenarios_path),
+        model=ModelNames.CEMENT,
+        dims=dims,
+        parameter_definitions=[
+            RemindMFAParameterDefinition(name="share", dim_letters=("r",)),
+            RemindMFAParameterDefinition(name="factor", dim_letters=("r",)),
+        ],
+        parameter_subset={"share"},
+    )
+    parameters = reader.get_parameters()
+    assert parameters["share"].values.tolist() == [2.0] * len(EU21_REGIONS)
+    assert parameters["factor"].values.tolist() == [1.0] * len(EU21_REGIONS)

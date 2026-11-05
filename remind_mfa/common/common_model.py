@@ -178,6 +178,7 @@ class CommonModel[CfgT: CommonCfg]:
         return set()
 
     def read_scenario_parameters(self):
+        subset = self.cfg.model_switches.scenario_parameter_subset
         scenario_reader = ScenarioReader(
             name=self.cfg.model_switches.scenario,
             base_path=self.cfg.input.scenarios_path,
@@ -186,6 +187,7 @@ class CommonModel[CfgT: CommonCfg]:
             parameter_definitions=self.get_scenario_parameter_definitions(),
             region_mappings_path=str(self.data_reader.region_mappings_path),
             inactive_parameters=self.get_inactive_scenario_parameter_names(),
+            parameter_subset=set(subset) if subset is not None else None,
         )
         self.scenario_parameters = scenario_reader.get_parameters()
         # scenario parameters used within the MFA systems

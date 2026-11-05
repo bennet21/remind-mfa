@@ -154,6 +154,10 @@ class ScenarioReader(RemindMFABaseModel):
     inactive_parameters: set[str] = set()
     """Names of scenario parameters of inactive model modules. Scenario rows setting them are
     skipped, while rows setting parameters that are not defined at all still raise an error."""
+    parameter_subset: Optional[set[str]] = None
+    """If given, only the rows of the selected scenario that set one of these parameters are
+    applied. Its parent scenarios are applied in full. Used to apply the measures of a scenario
+    step by step."""
     _scenarios: List["Scenario"] = []
     _parameters: dict = {}
 
@@ -188,6 +192,8 @@ class ScenarioReader(RemindMFABaseModel):
             scenario.filter_data_by_model(self.model)
             scenario.drop_parameters(self.inactive_parameters)
             scenario.data = self._resolve_regions(scenario)
+            if name == self.name and self.parameter_subset is not None:
+                scenario.keep_parameters(self.parameter_subset)
             self._scenarios.insert(0, scenario)
             if scenario.parent is None:
                 break
@@ -360,6 +366,10 @@ class Scenario(RemindMFABaseModel):
                 f"Scenario '{self.name}': skipping inactive scenario parameters {dropped}."
             )
         self.data = [p for p in self.data if p.parameter not in names]
+
+    def keep_parameters(self, names: set[str]):
+        """Remove the data points setting any parameter not among the given ones."""
+        self.data = [p for p in self.data if p.parameter in names]
 
     def apply(self, parameters: dict):
         for data_point in self.data:
