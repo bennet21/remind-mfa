@@ -13,6 +13,9 @@ Pragmatic Circularity and SSP1 shows the remaining difference, caused by the SSP
 (population, GDP and floor area). Colour only encodes the regions, which are labelled left of the
 SSP5 bar; the figure has no legend.
 
+A second version splits the bars by the H12 regions instead, shown as shades of the colour of
+their aggregated region.
+
 The intermediate steps are generated with
     uv run --no-sync python scritps_figures/generate_data.py --ce-steps
 Saved as PNG in `data/cement/output/figures`.
@@ -32,6 +35,7 @@ from ce_steps import CEStepChain
 from constants import (
     AGG_REGION_COLORS,
     AGG_REGION_ORDER,
+    AGG_REGIONS,
     BACKGROUND,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
@@ -40,9 +44,10 @@ from constants import (
 )
 from helpers import (
     ReconciledData,
-    aggregate_by_region,
     figure_cache_paths,
     load_figure_data,
+    shade,
+    shade_levels,
     to_h12,
 )
 
@@ -57,8 +62,6 @@ DRIVER_STEP_LABEL = "Driver difference"
 DRIVER_ASPECT = "Drivers"
 SCENARIO_BAR_WIDTH = 0.7
 STEP_BAR_WIDTH = 0.5
-# Space left of the first bar for the region labels, in bar positions.
-REGION_LABEL_SPACE = 1.8
 # Space right of the last bar for the total potential arrow and its label, in bar positions.
 TOTAL_POTENTIAL_SPACE = 1.9
 # Savings marked by a bracket above the bars, and the total potential marked by an arrow right
@@ -89,14 +92,89 @@ SAVINGS_BRACKET_OFFSET = 30
 # Head room above the highest bar, as a share of its value.
 Y_HEADROOM = 0.1
 
-# Line-broken region labels, placed left of the first bar.
-REGION_LABELS = {
-    "Sub-Saharan Africa": "Sub-Saharan<br>Africa",
-    "S & SE Asia": "S & SE Asia",
-    "Rest of the World": "Rest of<br>the World",
-    "China": "China",
-    "OECD": "OECD",
+# Minimum vertical distance between the centres of neighbouring region labels, in pixels.
+REGION_LABEL_MIN_GAP = 17
+
+
+@dataclass
+class RegionLevel:
+    """Regions the scenario bars are split into, from bottom to top.
+
+    Attributes:
+        name: Suffix of the output file.
+        labels: Label of each region, placed left of the first bar.
+        colors: Colour of each region.
+        of_h12: Region of each H12 region.
+        label_space: Space left of the first bar for the region labels, in bar positions.
+    """
+
+    name: str
+    labels: dict[str, str]
+    colors: dict[str, str]
+    of_h12: dict[str, str]
+    label_space: float
+
+    @property
+    def order(self) -> list[str]:
+        return list(self.labels)
+
+    def aggregate(self, h12_values: dict[str, float]) -> dict[str, float]:
+        """Sum values of the H12 regions to the regions of this level."""
+        result = dict.fromkeys(self.order, 0.0)
+        for h12_region, value in h12_values.items():
+            result[self.of_h12[h12_region]] += value
+        return result
+
+
+AGGREGATED = RegionLevel(
+    name="",
+    labels={
+        "Sub-Saharan Africa": "Sub-Saharan<br>Africa",
+        "S & SE Asia": "S & SE Asia",
+        "Rest of the World": "Rest of<br>the World",
+        "China": "China",
+        "OECD": "OECD",
+    },
+    colors=AGG_REGION_COLORS,
+    of_h12=AGG_REGIONS,
+    label_space=1.8,
+)
+
+# H12 regions grouped by aggregated region, in the order of AGG_REGION_ORDER.
+H12_LABELS = {
+    "SSA": "Sub-Saharan Africa",
+    "IND": "India",
+    "OAS": "Other Asia",
+    "LAM": "Latin America",
+    "MEA": "Middle East, N. Africa",
+    "REF": "Former Soviet Union",
+    "CHA": "China",
+    "USA": "USA",
+    "EUR": "EU 28",
+    "NEU": "Non-EU Europe",
+    "JPN": "Japan",
+    "CAZ": "Canada, NZ, Australia",
 }
+
+
+def h12_colors() -> dict[str, str]:
+    """Colour of each H12 region: shades of the colour of its aggregated region."""
+    colors = {}
+    for agg_region in AGG_REGION_ORDER:
+        members = [region for region in H12_LABELS if AGG_REGIONS[region] == agg_region]
+        levels = shade_levels(len(members)) if len(members) > 1 else [0.0]
+        for region, level in zip(members, levels):
+            colors[region] = shade(AGG_REGION_COLORS[agg_region], level)
+    return colors
+
+
+H12 = RegionLevel(
+    name="_h12",
+    labels=H12_LABELS,
+    colors=h12_colors(),
+    of_h12={region: region for region in H12_LABELS},
+    label_space=2.7,
+)
 
 
 def load_reconciled(run_name: str) -> ReconciledData:
@@ -114,13 +192,12 @@ def load_reconciled(run_name: str) -> ReconciledData:
 
 
 def cumulative_emissions_by_region(run_name: str) -> dict[str, float]:
-    """Future process CO2 emissions (Gt) summed over the years, per aggregated region."""
+    """Future process CO2 emissions (Gt) summed over the years, per H12 region."""
     print(f"Loading {run_name}...")
     emissions = to_h12(load_reconciled(run_name).emissions)
     future = np.array(emissions.dims["t"].items) > LAST_HISTORICAL_YEAR
-    region_items = np.array(emissions.dims["r"].items)
-    by_region = aggregate_by_region(emissions.values[future], region_items)
-    return {region: series.sum() * GT_PER_T for region, series in by_region.items()}
+    sums = emissions.values[future].sum(axis=0) * GT_PER_T
+    return dict(zip(emissions.dims["r"].items, sums))
 
 
 @dataclass
@@ -128,11 +205,11 @@ class ScenarioColumn:
     """A stacked bar of the cumulative emissions of a scenario, split by aggregated region."""
 
     label: str
-    regions: dict[str, float]
+    h12_regions: dict[str, float]
 
     @property
     def total(self) -> float:
-        return sum(self.regions.values())
+        return sum(self.h12_regions.values())
 
 
 @dataclass
@@ -154,6 +231,7 @@ class CEWaterfallFigure:
 
     def __init__(self):
         self.columns: list[ScenarioColumn | StepColumn] = []
+        self.regions = AGGREGATED
         for ssp in BASE_ORDER:
             scenario = ScenarioColumn(SSP_LABELS[ssp], cumulative_emissions_by_region(ssp))
             if ssp == DRIVER_STEP_SCENARIO:
@@ -184,17 +262,21 @@ class CEWaterfallFigure:
     def _positions(self, column_type: type) -> list[int]:
         return [index for index, column in enumerate(self.columns) if isinstance(column, column_type)]
 
+    def region_values(self, column: ScenarioColumn) -> dict[str, float]:
+        return self.regions.aggregate(column.h12_regions)
+
     def region_traces(self) -> list[go.Bar]:
         positions = self._positions(ScenarioColumn)
+        values = [self.region_values(self.columns[index]) for index in positions]
         return [
             go.Bar(
                 x=positions,
-                y=[self.columns[index].regions[region] for index in positions],
+                y=[column_values[region] for column_values in values],
                 width=SCENARIO_BAR_WIDTH,
-                marker=dict(color=AGG_REGION_COLORS[region], line=dict(color="white", width=1)),
+                marker=dict(color=self.regions.colors[region], line=dict(color="white", width=1)),
                 hoverinfo="skip",
             )
-            for region in AGG_REGION_ORDER
+            for region in self.regions.order
         ]
 
     def step_traces(self) -> list[go.Bar]:
@@ -319,31 +401,31 @@ class CEWaterfallFigure:
         ]
 
     def region_annotations(self) -> list[dict]:
-        """Region names left of the first bar, at the middle of each segment."""
-        first_column = self.columns[0]
-        annotations = []
-        running_total = 0.0
-        for region in AGG_REGION_ORDER:
-            segment = first_column.regions[region]
-            annotations.append(
-                dict(
-                    x=-SCENARIO_BAR_WIDTH / 2,
-                    y=running_total + segment / 2,
-                    ax=-24,
-                    ay=0,
-                    xanchor="right",
-                    text=REGION_LABELS[region],
-                    showarrow=True,
-                    arrowhead=0,
-                    arrowwidth=1,
-                    arrowcolor=CONNECTOR_COLOR,
-                    standoff=3,
-                    align="right",
-                    font=dict(size=14, color=LABEL_COLOR),
-                )
+        """Region names left of the first bar, pointing at the middle of each segment. Labels of
+        thin segments are moved apart so that they do not overlap."""
+        segments = np.array(list(self.region_values(self.columns[0]).values()))
+        middles = np.cumsum(segments) - segments / 2
+        label_positions = spread(middles, self._pixels_to_data(REGION_LABEL_MIN_GAP))
+        return [
+            dict(
+                x=-SCENARIO_BAR_WIDTH / 2,
+                y=middle,
+                ax=-24,
+                ay=(middle - label_position) / self._pixels_to_data(1),
+                xanchor="right",
+                text=self.regions.labels[region],
+                showarrow=True,
+                arrowhead=0,
+                arrowwidth=1,
+                arrowcolor=CONNECTOR_COLOR,
+                standoff=3,
+                align="right",
+                font=dict(size=14, color=LABEL_COLOR),
             )
-            running_total += segment
-        return annotations
+            for region, middle, label_position in zip(
+                self.regions.order, middles, label_positions
+            )
+        ]
 
     def value_annotations(self) -> list[dict]:
         """Totals above the scenario bars and changes above the step bars."""
@@ -515,7 +597,10 @@ class CEWaterfallFigure:
                 ticktext=self.tick_labels(),
                 ticks="",
                 tickangle=0,
-                range=[-0.5 - REGION_LABEL_SPACE, len(self.columns) - 0.5 + TOTAL_POTENTIAL_SPACE],
+                range=[
+                    -0.5 - self.regions.label_space,
+                    len(self.columns) - 0.5 + TOTAL_POTENTIAL_SPACE,
+                ],
             ),
             yaxis=dict(
                 title=dict(text=f"Process emissions {FIRST_FUTURE_YEAR}–2100 (Gt CO₂)"),
@@ -557,6 +642,21 @@ def wrap(label: str, max_line_length: int = 10) -> str:
     return "<br>".join(lines)
 
 
+def spread(positions: np.ndarray, min_gap: float) -> np.ndarray:
+    """Move ascending positions apart until neighbours are at least `min_gap` apart, shifting
+    each group of crowded positions symmetrically around its mean."""
+    offsets = min_gap * np.arange(len(positions))
+    # Pool adjacent violators: merge groups whose offset-free positions are out of order.
+    groups: list[tuple[float, int]] = []
+    for value in positions - offsets:
+        groups.append((value, 1))
+        while len(groups) > 1 and groups[-2][0] > groups[-1][0]:
+            (last_value, last_size), (previous_value, previous_size) = groups.pop(), groups.pop()
+            size = last_size + previous_size
+            groups.append(((last_value * last_size + previous_value * previous_size) / size, size))
+    return np.repeat([value for value, _ in groups], [size for _, size in groups]) + offsets
+
+
 def save(fig: go.Figure, output_name: str, width: int, height: int):
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     png_path = (FIGURES_DIR / output_name).with_suffix(".png")
@@ -565,6 +665,13 @@ def save(fig: go.Figure, output_name: str, width: int, height: int):
 
 
 figure = CEWaterfallFigure()
-save(figure.plot(), "fig11_ce_waterfall_process_emissions", width=WIDTH, height=HEIGHT)
+for region_level in (AGGREGATED, H12):
+    figure.regions = region_level
+    save(
+        figure.plot(),
+        f"fig11_ce_waterfall_process_emissions{region_level.name}",
+        width=WIDTH,
+        height=HEIGHT,
+    )
 
 print("END")
