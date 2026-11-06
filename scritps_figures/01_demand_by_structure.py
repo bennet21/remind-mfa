@@ -22,7 +22,7 @@ from constants import (
     SCENARIOS as SCENARIO_KEYS,
     FIGURES_DIR,
     FIRST_PLOT_YEAR,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
     FUNCTION_DISPLAY_NAMES,
@@ -429,7 +429,7 @@ def run(ssp: str):
     plot_global(combined, time, series, f"fig1_demand_by_structure_global_{ssp}")
     plot_regional(
         combined, time, series, f"fig1_demand_by_structure_h12_{ssp}",
-        regions, REGION_DISPLAY_NAMES, ncols=4,
+        regions, REGION_SHORT_NAMES, ncols=4,
     )
     plot_regional(
         combined, time, series, f"fig1_demand_by_structure_agg_{ssp}",

@@ -33,7 +33,7 @@ from constants import (
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
     CONCRETE_MASK,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
 )
 from helpers import load_model, cache_is_valid
 
@@ -473,8 +473,8 @@ if MODE == "global":
         output_name="fig5_reconciliation_waterfall_global",
     )
 elif MODE == "regional":
-    for region in REGION_DISPLAY_NAMES:
-        label = REGION_DISPLAY_NAMES[region].replace("<br>", " ")
+    for region in REGION_SHORT_NAMES:
+        label = REGION_SHORT_NAMES[region].replace("<br>", " ")
         make_figure(
             analyzer, pr, population,
             region=region, region_label=label,

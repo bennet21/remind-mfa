@@ -25,7 +25,7 @@ from constants import (
     LAST_HISTORICAL_YEAR,
     OTHER_CIV_NAME,
     OTHER_IND_NAME,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
     SSP_CACHE_DIRS,
     SSP_COLORS,
     SSP_DASHES,
@@ -65,7 +65,7 @@ def plot_end_use(end_use: str, output_name: str):
     fig = make_subplots(
         rows=nrows,
         cols=NCOLS,
-        subplot_titles=[REGION_DISPLAY_NAMES.get(str(r), str(r)) for r in regions],
+        subplot_titles=[REGION_SHORT_NAMES.get(str(r), str(r)) for r in regions],
         vertical_spacing=0.12,
         horizontal_spacing=0.06,
     )

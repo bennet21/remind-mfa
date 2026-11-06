@@ -11,8 +11,10 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from constants import (
+    AGG_REGION_COLORS,
     AGG_REGION_ORDER,
     AGG_REGIONS,
+    H12_REGION_ORDER,
     LAST_HISTORICAL_YEAR,
     MODEL_REGIONMAPPING_CSVS,
     REGION_MAPPING,
@@ -100,6 +102,23 @@ def shade_levels(n: int) -> list[float]:
     if n <= 1:
         return [0.1]
     return [SHADE_MIN + (SHADE_MAX - SHADE_MIN) * i / (n - 1) for i in range(n)]
+
+
+def _h12_region_colors() -> dict[str, str]:
+    """Colour of each H12 region: shades of the colour of its aggregated region, in
+    H12_REGION_ORDER. A region that is alone in its aggregated region keeps that colour.
+    The shades of CAZ and NEU are swapped, so that the neighbouring EUR and NEU differ more."""
+    colors = {}
+    for agg_region in AGG_REGION_ORDER:
+        members = [region for region in H12_REGION_ORDER if AGG_REGIONS[region] == agg_region]
+        levels = shade_levels(len(members)) if len(members) > 1 else [0.0]
+        for region, level in zip(members, levels):
+            colors[region] = shade(AGG_REGION_COLORS[agg_region], level)
+    colors["CAZ"], colors["NEU"] = colors["NEU"], colors["CAZ"]
+    return {region: colors[region] for region in H12_REGION_ORDER}
+
+
+H12_REGION_COLORS = _h12_region_colors()
 
 
 @dataclass

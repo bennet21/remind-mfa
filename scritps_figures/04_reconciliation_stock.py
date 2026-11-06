@@ -29,7 +29,7 @@ from constants import (
     MAIN_SCENARIO,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
     STOCK_TYPE_BASE_COLORS,
@@ -96,7 +96,7 @@ STOCK = {
 }
 POP = to_h12(data.reconciled.population)
 regions = list(STOCK["TD"].dims["r"].items)
-x_labels = [REGION_DISPLAY_NAMES.get(str(r), str(r)) for r in regions]
+x_labels = [REGION_SHORT_NAMES.get(str(r), str(r)) for r in regions]
 
 
 # --- per-column value accessors: regional (per region) and global (summed over regions) ---

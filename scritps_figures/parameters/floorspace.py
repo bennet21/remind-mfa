@@ -23,7 +23,7 @@ from constants import (
     BACKGROUND,
     FIGURES_DIR,
     LAST_HISTORICAL_YEAR,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
     SSP_CACHE_DIRS,
     SSP_COLORS,
     SSP_DASHES,
@@ -139,7 +139,7 @@ def plot_region(region, title: str, output_name: str):
 
 for region in regions:
     region = str(region)
-    plot_region(region, REGION_DISPLAY_NAMES.get(region, region), f"floorspace_{region}")
+    plot_region(region, REGION_SHORT_NAMES.get(region, region), f"floorspace_{region}")
 
 plot_region(None, "Global", "floorspace_Global")
 

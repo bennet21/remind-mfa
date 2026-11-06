@@ -34,20 +34,20 @@ import plotly.graph_objects as go
 from ce_steps import CEStepChain
 from constants import (
     AGG_REGION_COLORS,
-    AGG_REGION_ORDER,
     AGG_REGIONS,
     BACKGROUND,
     FIGURES_DIR,
+    H12_REGION_ORDER,
     LAST_HISTORICAL_YEAR,
+    REGION_SHORT_NAMES,
     SCENARIOS,
     SSP_LABELS,
 )
 from helpers import (
+    H12_REGION_COLORS,
     ReconciledData,
     figure_cache_paths,
     load_figure_data,
-    shade,
-    shade_levels,
     to_h12,
 )
 
@@ -76,6 +76,8 @@ LABEL_COLOR = "#444444"
 SAVINGS_COLOR = "#1a1a1a"
 SAVINGS_LINE_WIDTH = 1.2
 TOTAL_ARROW_WIDTH = 2.2
+# Shaded band spanning the total potential, behind the bars.
+TOTAL_BAND_COLOR = "rgba(0,0,0,0.1)"
 GRID_COLOR = "#f2f2f2"
 
 # Figure geometry in pixels, used to place the step labels and the brackets below them.
@@ -92,8 +94,9 @@ SAVINGS_BRACKET_OFFSET = 30
 # Head room above the highest bar, as a share of its value.
 Y_HEADROOM = 0.1
 
-# Minimum vertical distance between the centres of neighbouring region labels, in pixels.
-REGION_LABEL_MIN_GAP = 17
+# Height of a line of the region labels and the space between neighbouring labels, in pixels.
+REGION_LABEL_LINE_HEIGHT = 17
+REGION_LABEL_PADDING = 6
 
 
 @dataclass
@@ -140,39 +143,11 @@ AGGREGATED = RegionLevel(
     label_space=1.8,
 )
 
-# H12 regions grouped by aggregated region, in the order of AGG_REGION_ORDER.
-H12_LABELS = {
-    "SSA": "Sub-Saharan Africa",
-    "IND": "India",
-    "OAS": "Other Asia",
-    "LAM": "Latin America",
-    "MEA": "Middle East, N. Africa",
-    "REF": "Former Soviet Union",
-    "CHA": "China",
-    "USA": "USA",
-    "EUR": "EU 28",
-    "NEU": "Non-EU Europe",
-    "JPN": "Japan",
-    "CAZ": "Canada, NZ, Australia",
-}
-
-
-def h12_colors() -> dict[str, str]:
-    """Colour of each H12 region: shades of the colour of its aggregated region."""
-    colors = {}
-    for agg_region in AGG_REGION_ORDER:
-        members = [region for region in H12_LABELS if AGG_REGIONS[region] == agg_region]
-        levels = shade_levels(len(members)) if len(members) > 1 else [0.0]
-        for region, level in zip(members, levels):
-            colors[region] = shade(AGG_REGION_COLORS[agg_region], level)
-    return colors
-
-
 H12 = RegionLevel(
     name="_h12",
-    labels=H12_LABELS,
-    colors=h12_colors(),
-    of_h12={region: region for region in H12_LABELS},
+    labels={region: REGION_SHORT_NAMES[region] for region in H12_REGION_ORDER},
+    colors=H12_REGION_COLORS,
+    of_h12={region: region for region in H12_REGION_ORDER},
     label_space=2.7,
 )
 
@@ -405,7 +380,11 @@ class CEWaterfallFigure:
         thin segments are moved apart so that they do not overlap."""
         segments = np.array(list(self.region_values(self.columns[0]).values()))
         middles = np.cumsum(segments) - segments / 2
-        label_positions = spread(middles, self._pixels_to_data(REGION_LABEL_MIN_GAP))
+        line_counts = [self.regions.labels[region].count("<br>") + 1 for region in self.regions.order]
+        heights = self._pixels_to_data(
+            np.array(line_counts) * REGION_LABEL_LINE_HEIGHT + REGION_LABEL_PADDING
+        )
+        label_positions = spread(middles, heights)
         return [
             dict(
                 x=-SCENARIO_BAR_WIDTH / 2,
@@ -550,6 +529,19 @@ class CEWaterfallFigure:
             )
             for level in (start.total, end.total)
         ]
+        # Band from the start to the end of the total potential, behind the bars.
+        shapes.append(
+            dict(
+                type="rect",
+                x0=self._scenario_index(TOTAL_POTENTIAL[0]) - SCENARIO_BAR_WIDTH / 2,
+                x1=x_arrow + 0.12,
+                y0=end.total,
+                y1=start.total,
+                fillcolor=TOTAL_BAND_COLOR,
+                line=dict(width=0),
+                layer="below",
+            )
+        )
         annotations = [
             dict(
                 x=x_arrow,
@@ -642,10 +634,11 @@ def wrap(label: str, max_line_length: int = 10) -> str:
     return "<br>".join(lines)
 
 
-def spread(positions: np.ndarray, min_gap: float) -> np.ndarray:
-    """Move ascending positions apart until neighbours are at least `min_gap` apart, shifting
-    each group of crowded positions symmetrically around its mean."""
-    offsets = min_gap * np.arange(len(positions))
+def spread(positions: np.ndarray, heights: np.ndarray) -> np.ndarray:
+    """Move the centres of ascending labels of the given `heights` apart until they do not
+    overlap, shifting each group of crowded labels symmetrically around its mean."""
+    gaps = (heights[:-1] + heights[1:]) / 2
+    offsets = np.concatenate([[0.0], np.cumsum(gaps)])
     # Pool adjacent violators: merge groups whose offset-free positions are out of order.
     groups: list[tuple[float, int]] = []
     for value in positions - offsets:

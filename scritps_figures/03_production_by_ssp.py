@@ -21,7 +21,7 @@ from constants import (
     FIGURES_DIR,
     FIRST_PLOT_YEAR,
     LAST_HISTORICAL_YEAR,
-    REGION_DISPLAY_NAMES,
+    REGION_SHORT_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
     SCENARIOS,
@@ -33,6 +33,17 @@ from helpers import add_last_historical_line, load_figure_data, to_h12
 
 MT_PER_T = 1e-6
 BAND_OPACITY = 0.15
+# Figure with the global panel on top: first year of the global panel, year and offset (px) of the
+# label of the historical line, and minimum vertical distance of the scenario labels at the right
+# end of the lines (share of the y-axis range).
+GLOBAL_TOP_FIRST_YEAR = 1880
+HISTORICAL_LABEL = (1960, (-40, -40))
+LABEL_MIN_GAP = 0.085
+# Scenarios labelled within the global panel, just above their line, instead of at its right end:
+# label text and year.
+INLINE_LABELS = {"SSP2": ("SSP2", 2065)}
+# Font sizes of the figure with the global panel on top.
+GLOBAL_TOP_FONT_SIZES = {"label": 19, "subplot_title": 19, "axis_title": 22, "tick": 16}
 YLABEL = "Cement production (Mt)"
 SSPS = list(SCENARIOS)
 
@@ -112,6 +123,80 @@ def add_ssp_traces(fig, region=None, showlegend=True, row=None, col=None):
                 showlegend=showlegend,
             ),
             **kwargs,
+        )
+
+
+def spread_labels(targets: list[float], min_gap: float) -> list[float]:
+    """Label positions close to `targets` and at least `min_gap` apart."""
+    order = sorted(range(len(targets)), key=lambda index: targets[index])
+    positions = [targets[index] for index in order]
+    for _ in range(200):
+        moved = False
+        for index in range(len(positions) - 1):
+            overlap = min_gap - (positions[index + 1] - positions[index])
+            if overlap > 1e-9:
+                positions[index] -= overlap / 2
+                positions[index + 1] += overlap / 2
+                moved = True
+        if not moved:
+            break
+    spread = [0.0] * len(targets)
+    for position, index in zip(positions, order):
+        spread[index] = position
+    return spread
+
+
+def add_line_labels(fig, first_year: int, y_max: float):
+    """Labels instead of a legend for the global panel (axes x, y): the historical line is
+    labelled directly, the scenarios at the right end of their lines, connected by thin lines."""
+    year, (offset_x, offset_y) = HISTORICAL_LABEL
+    historical_values = production(combined_by_ssp["SSP2"]).values
+    fig.add_annotation(
+        x=year,
+        y=float(historical_values[list(time).index(year)]),
+        ax=offset_x,
+        ay=offset_y,
+        text="Historical",
+        showarrow=True,
+        arrowhead=0,
+        arrowwidth=0.6,
+        arrowcolor="rgba(0,0,0,0.35)",
+        standoff=2,
+        font={"size": GLOBAL_TOP_FONT_SIZES["label"], "color": "black"},
+    )
+    end_year = max(time)
+    for ssp, (text, year) in INLINE_LABELS.items():
+        fig.add_annotation(
+            x=year,
+            y=float(production(combined_by_ssp[ssp]).values[list(time).index(year)]),
+            text=text,
+            showarrow=False,
+            yanchor="bottom",
+            yshift=6,
+            font={"size": GLOBAL_TOP_FONT_SIZES["label"], "color": SSP_COLORS[ssp]},
+        )
+    end_labelled = [ssp for ssp in SSPS if ssp not in INLINE_LABELS]
+    targets = [float(production(combined_by_ssp[ssp]).values[-1]) for ssp in end_labelled]
+    positions = spread_labels(targets, LABEL_MIN_GAP * y_max)
+    label_x = end_year + 0.03 * (end_year - first_year)
+    for ssp, target, position in zip(end_labelled, targets, positions):
+        fig.add_annotation(
+            x=end_year,
+            y=target,
+            ax=label_x,
+            ay=position,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            text=SSP_LABELS[ssp],
+            xanchor="left",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=0.6,
+            arrowcolor="rgba(0,0,0,0.35)",
+            standoff=2,
+            font={"size": GLOBAL_TOP_FONT_SIZES["label"], "color": SSP_COLORS[ssp]},
         )
 
 
@@ -291,9 +376,90 @@ def plot_combined(output_name: str, region_items, display_names, ncols_regional:
     save(fig, output_name, width=2100, height=850)
 
 
+def plot_combined_top(output_name: str, region_items, display_names, ncols_regional: int):
+    """Global panel (from GLOBAL_TOP_FIRST_YEAR) on top and a regional grid below (from 2000).
+    The global panel spans all but the last column; its line labels fill the last column."""
+    nrows_regional = math.ceil(len(region_items) / ncols_regional)
+
+    specs = [[{"colspan": ncols_regional - 1}] + [None] * (ncols_regional - 1)]
+    for _ in range(nrows_regional):
+        specs.append([{}] * ncols_regional)
+
+    subplot_titles = ["Global"] + [display_names.get(str(r), str(r)) for r in region_items]
+
+    fig = make_subplots(
+        rows=nrows_regional + 1,
+        cols=ncols_regional,
+        specs=specs,
+        subplot_titles=subplot_titles,
+        vertical_spacing=0.09,
+        horizontal_spacing=0.055,
+        row_heights=[1.6] + [1] * nrows_regional,
+    )
+
+    add_ssp_traces(fig, region=None, showlegend=False, row=1, col=1)
+    add_last_historical_line(fig, label=True, row=1, col=1)
+    y_max = 1.05 * max(production(combined).values.max() for combined in combined_by_ssp.values())
+    fig.update_yaxes(showgrid=True, range=[0, y_max], row=1, col=1)
+    add_line_labels(fig, GLOBAL_TOP_FIRST_YEAR, y_max)
+
+    for index, region in enumerate(region_items):
+        row = index // ncols_regional + 2
+        col = index % ncols_regional + 1
+        add_ssp_traces(fig, region=region, showlegend=False, row=row, col=col)
+        add_last_historical_line(fig, row=row, col=col)
+        fig.update_yaxes(showgrid=True, row=row, col=col)
+
+    for annotation in fig.layout.annotations[: len(subplot_titles)]:
+        annotation.font = {"size": GLOBAL_TOP_FONT_SIZES["subplot_title"]}
+    # left-aligned, clear of the label of the last historical year
+    fig.layout.annotations[0].update(x=fig.layout.xaxis.domain[0], xanchor="left")
+    for annotation in fig.layout.annotations:
+        if annotation.text == "Last historical year":
+            annotation.font.size = GLOBAL_TOP_FONT_SIZES["label"]
+
+    fig.update_xaxes(range=[2000, max(time)], dtick=50)
+    fig.update_xaxes(range=[GLOBAL_TOP_FIRST_YEAR, max(time)], row=1, col=1)
+    fig.update_xaxes(tickfont={"size": GLOBAL_TOP_FONT_SIZES["tick"]})
+    fig.update_yaxes(nticks=4, tickfont={"size": GLOBAL_TOP_FONT_SIZES["tick"]})
+
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+        margin={"t": 60, "l": 110, "b": 100, "r": 30},
+        annotations=list(fig.layout.annotations)
+        + [
+            dict(
+                text="Year",
+                x=0.5, y=-0.04,
+                xref="paper", yref="paper",
+                showarrow=False,
+                xanchor="center", yanchor="top",
+                font={"size": GLOBAL_TOP_FONT_SIZES["axis_title"]},
+            ),
+            dict(
+                text=YLABEL,
+                x=-0.06, y=0.5,
+                xref="paper", yref="paper",
+                showarrow=False,
+                xanchor="center", yanchor="middle",
+                textangle=-90,
+                font={"size": GLOBAL_TOP_FONT_SIZES["axis_title"]},
+            ),
+        ],
+    )
+    save(fig, output_name, width=1700, height=1300)
+
+
 plot_global("fig3_production_by_ssp_global")
-plot_regional("fig3_production_by_ssp_h12", regions, REGION_DISPLAY_NAMES, ncols=4)
+plot_regional("fig3_production_by_ssp_h12", regions, REGION_SHORT_NAMES, ncols=4)
 plot_regional("fig3_production_by_ssp_agg", AGG_REGION_ORDER, {}, ncols=3, include_world=True)
-plot_combined("fig3_production_by_ssp_h12_global", regions, REGION_DISPLAY_NAMES, ncols_regional=4)
+plot_combined("fig3_production_by_ssp_h12_global", regions, REGION_SHORT_NAMES, ncols_regional=4)
+
+plot_combined_top(
+    "fig3_production_by_ssp_h12_global_top", regions, REGION_SHORT_NAMES, ncols_regional=4
+)
 
 print("END")

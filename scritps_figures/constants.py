@@ -90,6 +90,22 @@ REGION_DISPLAY_NAMES = {
     "USA": "USA",
 }
 
+# Single-line versions of REGION_DISPLAY_NAMES, used in the figures.
+REGION_SHORT_NAMES = {
+    "CAZ": "Canada, NZ, Australia",
+    "CHA": "China",
+    "EUR": "EU 28",
+    "IND": "India",
+    "JPN": "Japan",
+    "LAM": "Latin America",
+    "MEA": "Middle East, N. Africa",
+    "NEU": "Non-EU Europe",
+    "OAS": "Other Asia",
+    "REF": "Former Soviet Union",
+    "SSA": "Sub-Saharan Africa",
+    "USA": "USA",
+}
+
 AGG_REGIONS = {
     "CAZ": "OECD",
     "CHA": "China",
@@ -112,6 +128,9 @@ AGG_REGION_ORDER = [
     "China",
     "OECD",
 ]
+
+# H12 regions grouped by aggregated region, in the order of AGG_REGION_ORDER.
+H12_REGION_ORDER = ["SSA", "IND", "OAS", "LAM", "MEA", "REF", "CHA", "USA", "EUR", "NEU", "JPN", "CAZ"]
 
 # Fixed per-region colors for distinguishing aggregated regions (e.g. figure 8)
 AGG_REGION_COLORS = {
