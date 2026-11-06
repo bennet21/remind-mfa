@@ -404,39 +404,50 @@ def add_direct_labels(
         )
 
 
+def add_bracket(fig: go.Figure, x: float, end_length: float, top: float, bottom: float):
+    """Square bracket left of the y-axis, at `x` in paper coordinates and from `top` to `bottom`
+    in y coordinates, with ends of `end_length` (paper coordinates) pointing to the right."""
+    fig.add_shape(
+        type="path",
+        path=(
+            f"M {x + end_length},{top} L {x},{top} L {x},{bottom} L {x + end_length},{bottom}"
+        ),
+        xref="paper",
+        yref="y",
+        line={"color": "black", "width": 0.8},
+    )
+
+
 def add_parameter_labels(
     fig: go.Figure, rows: list[CorrectionRow], y_positions: list[float], plot_width: float
 ):
-    """Parameter names left of the item tick labels of the y-axis, with a square bracket that
-    spans the rows of each parameter with more than one row.
+    """Labels of the y-axis on two levels left of the item tick labels: the parameter names, with
+    a square bracket that spans the rows of each parameter with more than one row, and the
+    sections of `PARAMETER_SECTIONS` (bottom-up and top-down parameters), with a bracket and a
+    vertical label. The sections are separated by a dotted line across the plot.
 
     Args:
         plot_width: Width of the plot area in pixels, to convert pixel offsets from the y-axis
             into paper coordinates.
     """
-    bracket_x = -PARAMETER_BRACKET_OFFSET / plot_width
-    bracket_end_x = bracket_x + PARAMETER_BRACKET_END / plot_width
-    name_x = bracket_x - PARAMETER_NAME_GAP / plot_width
+    end_length = PARAMETER_BRACKET_END / plot_width
+    parameter_bracket_x = -PARAMETER_BRACKET_OFFSET / plot_width
+    section_bracket_x = -SECTION_BRACKET_OFFSET / plot_width
 
-    groups: dict[str, list[float]] = {}
+    parameter_rows: dict[str, list[float]] = {}
     for row, y_position in zip(rows, y_positions):
-        groups.setdefault(row.prm_name, []).append(y_position)
-    for prm_name, group_y_positions in groups.items():
-        top = max(group_y_positions) + PARAMETER_BRACKET_OVERHANG
-        bottom = min(group_y_positions) - PARAMETER_BRACKET_OVERHANG
+        parameter_rows.setdefault(row.prm_name, []).append(y_position)
+    for prm_name, group_y_positions in parameter_rows.items():
         if len(group_y_positions) > 1:
-            fig.add_shape(
-                type="path",
-                path=(
-                    f"M {bracket_end_x},{top} L {bracket_x},{top} "
-                    f"L {bracket_x},{bottom} L {bracket_end_x},{bottom}"
-                ),
-                xref="paper",
-                yref="y",
-                line={"color": "black", "width": 0.8},
+            add_bracket(
+                fig,
+                parameter_bracket_x,
+                end_length,
+                max(group_y_positions) + PARAMETER_BRACKET_OVERHANG,
+                min(group_y_positions) - PARAMETER_BRACKET_OVERHANG,
             )
         fig.add_annotation(
-            x=name_x,
+            x=parameter_bracket_x - PARAMETER_NAME_GAP / plot_width,
             y=float(np.mean(group_y_positions)),
             xref="paper",
             yref="y",
@@ -444,6 +455,40 @@ def add_parameter_labels(
             xanchor="right",
             showarrow=False,
             font={"size": 12},
+        )
+
+    section_bounds = []
+    for section, prm_names in PARAMETER_SECTIONS.items():
+        section_y_positions = [
+            y for prm_name in prm_names for y in parameter_rows.get(prm_name, [])
+        ]
+        if not section_y_positions:
+            continue
+        top = max(section_y_positions) + PARAMETER_BRACKET_OVERHANG
+        bottom = min(section_y_positions) - PARAMETER_BRACKET_OVERHANG
+        section_bounds.append((top, bottom))
+        add_bracket(fig, section_bracket_x, end_length, top, bottom)
+        fig.add_annotation(
+            x=section_bracket_x - SECTION_NAME_GAP / plot_width,
+            y=0.5 * (top + bottom),
+            xref="paper",
+            yref="y",
+            text=section,
+            textangle=-90,
+            xanchor="right",
+            showarrow=False,
+            font={"size": 13},
+        )
+    for (_, upper_bottom), (lower_top, _) in zip(section_bounds[:-1], section_bounds[1:]):
+        fig.add_shape(
+            type="line",
+            x0=0,
+            x1=1,
+            y0=0.5 * (upper_bottom + lower_top),
+            y1=0.5 * (upper_bottom + lower_top),
+            xref="paper",
+            yref="y",
+            line={"color": SECTION_LINE_COLOR, "width": 0.8, "dash": "dot"},
         )
 
 
@@ -475,12 +520,19 @@ def plot_corrections(
     change_factor_xref = "x2" if show_standardized else "x"
     show_box = not any(series.legend_group == "countries" for series in point_series)
 
-    # y positions from top to bottom, with a gap between parameters
+    # y positions from top to bottom, with a gap between parameters and a larger one between
+    # sections
+    section_of = {
+        prm_name: section
+        for section, prm_names in PARAMETER_SECTIONS.items()
+        for prm_name in prm_names
+    }
     y_positions = []
     y = 0.0
     for index, row in enumerate(rows):
         if index > 0 and row.prm_name != rows[index - 1].prm_name:
-            y -= PARAMETER_GAP
+            same_section = section_of[row.prm_name] == section_of[rows[index - 1].prm_name]
+            y -= PARAMETER_GAP if same_section else SECTION_GAP
         y_positions.append(y)
         y -= 1.0
     y_range = [min(y_positions) - 0.7, 0.7]
@@ -627,10 +679,10 @@ def plot_corrections(
     )
     width = 1350 if show_standardized else 900
     add_parameter_labels(fig, rows, y_positions, plot_width=width - LEFT_MARGIN - 10)
-    save(fig, output_name, width=width, height=90 + 19 * (len(y_positions) + 2))
+    save(fig, output_name, width=width, height=90 + ROW_HEIGHT * (y_range[1] - y_range[0]))
 
 
-# Parameters in display order: bottom-up parameters first, then top-down parameters.
+# Parameters in display order.
 PARAMETER_DISPLAY_NAMES = {
     "floorspace_pc": "Floor space per capita",
     "floorspace_net_to_gross": "Net-to-gross floor space",
@@ -645,15 +697,36 @@ PARAMETER_DISPLAY_NAMES = {
     "cement_loss_rate": "Cement loss rate",
 }
 PARAMETER_ORDER = list(PARAMETER_DISPLAY_NAMES)
+# Parameters of the bottom-up and the top-down stock model, labeled as sections of the y-axis.
+PARAMETER_SECTIONS = {
+    "Bottom-up": [
+        "floorspace_pc",
+        "floorspace_net_to_gross",
+        "unoccupied_residential_stock_share",
+        "residential_type_split",
+        "structure_split",
+        "concrete_building_mi",
+    ],
+    "Top-down": [
+        "end_use_split",
+        "construction_material_split",
+        "cement_ratio",
+        "lifetime_mean",
+        "cement_loss_rate",
+    ],
+}
 # Separator of the items of several dimensions in the tick labels (e.g. "RS · C").
 ITEM_SEPARATOR = " · "
-# Left margin of the figure, holding item tick labels, brackets and parameter names, and the
-# horizontal offsets of the brackets from the y-axis, their end ticks and the gap to the
-# parameter names, in pixels.
-LEFT_MARGIN = 250
+# Left margin of the figure, holding item tick labels, brackets, parameter and section names,
+# and the horizontal offsets of the parameter and section brackets from the y-axis, their end
+# ticks and the gaps to the names, in pixels.
+LEFT_MARGIN = 290
 PARAMETER_BRACKET_OFFSET = 62
+SECTION_BRACKET_OFFSET = 250
 PARAMETER_BRACKET_END = 5
 PARAMETER_NAME_GAP = 6
+SECTION_NAME_GAP = 6
+SECTION_LINE_COLOR = "#8c8c8c"
 # Vertical overhang of the brackets beyond the first and last row of a parameter, in row heights.
 PARAMETER_BRACKET_OVERHANG = 0.35
 # Items with |δ| below this value in all regions are not shown.
@@ -661,6 +734,10 @@ MIN_ABS_DELTA = 1e-9
 # Vertical gap between parameters, jitter of the country points and vertical spread of the
 # aggregated-region points, in row heights.
 PARAMETER_GAP = 0.6
+# Vertical gap between the sections of `PARAMETER_SECTIONS`, in row heights.
+SECTION_GAP = 1.6
+# Height of a row in pixels.
+ROW_HEIGHT = 17.5
 JITTER = 0.2
 AGG_POINT_SPREAD = 0.24
 # Half height of the uncertainty bands, in row heights.
@@ -680,7 +757,7 @@ DIRECT_LABELS = {
         2.5,
         0.3,
     ),
-    "violin": ("End-use split Com", "Distribution over<br>all {n_regions} regions", 0.35, 3.1, 0.3),
+    "violin": ("End-use split Com", "Distribution over<br>all {n_regions} regions", 0.35, 4.1, 0.3),
 }
 # Percentile of the values of the example row the arrow of the violin label points to.
 DIRECT_LABEL_VIOLIN_PERCENTILE = 10
