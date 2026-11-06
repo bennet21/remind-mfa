@@ -20,6 +20,7 @@ from constants import (
     BACKGROUND,
     FIGURES_DIR,
     FIRST_PLOT_YEAR,
+    LAST_HISTORICAL_YEAR,
     REGION_DISPLAY_NAMES,
     AGG_REGIONS,
     AGG_REGION_ORDER,
@@ -85,11 +86,25 @@ def add_ce_bands(fig, region=None, kwargs=None):
 def add_ssp_traces(fig, region=None, showlegend=True, row=None, col=None):
     kwargs = {"row": row, "col": col} if row is not None else {}
     add_ce_bands(fig, region=region, kwargs=kwargs)
+    is_historical = [year <= LAST_HISTORICAL_YEAR for year in time]
+    is_future = [year >= LAST_HISTORICAL_YEAR for year in time]
+    historical_values = production(combined_by_ssp["SSP2"], region=region).values
+    fig.add_trace(
+        go.Scatter(
+            x=[year for year, keep in zip(time, is_historical) if keep],
+            y=historical_values[is_historical],
+            mode="lines",
+            line={"color": "black", "width": 2},
+            name="Historical",
+            showlegend=showlegend,
+        ),
+        **kwargs,
+    )
     for ssp in SSPS:
         fig.add_trace(
             go.Scatter(
-                x=time,
-                y=production(combined_by_ssp[ssp], region=region).values,
+                x=[year for year, keep in zip(time, is_future) if keep],
+                y=production(combined_by_ssp[ssp], region=region).values[is_future],
                 mode="lines",
                 line={"color": SSP_COLORS[ssp], "width": 2, "dash": SSP_DASHES[ssp]},
                 name=SSP_LABELS[ssp],
