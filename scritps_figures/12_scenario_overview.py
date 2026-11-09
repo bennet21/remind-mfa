@@ -14,7 +14,7 @@ value in 2100 is the population-weighted (SSP2, last historical year) mean of th
 values of the model run. It is normalized to 0 for SSP2 and 1 for Ambitious Circularity. The
 normalized values are averaged within each CE measure of ce_steps.CE_STEPS and then across the
 measures, so each measure has equal weight. Planned TODO values enter the circularity depth
-instead of the values of the model run.
+instead of the values of the model run. The right panel is also saved on its own.
 
 The table lists the CE scenarios first, followed by SSP1 to SSP5.
 Saved as PNG in `data/cement/output/figures`.
@@ -63,6 +63,8 @@ SEPARATOR_COLOR = "#d9d9d9"
 STRIPE_COLOR = "#f3f3f3"
 AXIS_COLOR = "#444444"
 TODO_COLOR = "#b2182b"
+# Half diagonal of the diamond outline of CE markers in the circularity depth panel, in pixels.
+CE_MARKER_HALF_SIZE = 10
 
 # Figure geometry in pixels. The table is drawn with paper-referenced shapes and annotations.
 LABEL_WIDTH = 205
@@ -359,18 +361,25 @@ class CellFormatter:
 
 
 class ScenarioOverviewFigure:
-    def __init__(self):
-        self.data = ScenarioData()
+    panel_left = PANEL_LEFT
+    # Whether the circularity depth increases downwards.
+    flipped = False
+    # Font size of tick labels, scenario labels and the axis title (+2).
+    font_size = TABLE_FONT_SIZE
+    width = WIDTH
+    height = HEIGHT
+    panel_height = TABLE_BOTTOM
+
+    def __init__(self, data: ScenarioData | None = None):
+        self.data = ScenarioData() if data is None else data
         self.formatter = CellFormatter(self.data)
         self.depths = {ssp: self.data.circularity_depth(ssp) for ssp in COLUMN_ORDER}
 
-    @staticmethod
-    def _x(pixels: float) -> float:
-        return pixels / PLOT_WIDTH
+    def _x(self, pixels: float) -> float:
+        return pixels / (self.width - MARGIN["l"] - MARGIN["r"])
 
-    @staticmethod
-    def _y(pixels_from_top: float) -> float:
-        return 1 - pixels_from_top / PLOT_HEIGHT
+    def _y(self, pixels_from_top: float) -> float:
+        return 1 - pixels_from_top / (self.height - MARGIN["t"] - MARGIN["b"])
 
     @staticmethod
     def _column_center(index: int) -> float:
@@ -508,20 +517,40 @@ class ScenarioOverviewFigure:
                         symbol="diamond" if is_ce else "circle",
                         size=16 if is_ce else 14,
                         color="white" if is_ce else SSP_COLORS[ssp],
-                        line=dict(color=SSP_COLORS[ssp], width=2.5 if is_ce else 0),
+                        # outline of CE markers is drawn dashed by `depth_shapes`
+                        line=dict(width=0),
                     ),
                     hoverinfo="skip",
                 )
             )
         return traces
 
+    def depth_shapes(self) -> list[dict]:
+        """Dashed outline of the CE markers, as in the colour marks of the table header."""
+        half = CE_MARKER_HALF_SIZE
+        return [
+            dict(
+                type="path",
+                xref="x", yref="y",
+                xanchor=self._position(ssp), yanchor=self.depths[ssp],
+                xsizemode="pixel", ysizemode="pixel",
+                path=f"M 0,{half} L {half},0 L 0,{-half} L {-half},0 Z",
+                fillcolor="rgba(0,0,0,0)",
+                line=dict(color=SSP_COLORS[ssp], width=2.5, dash="6px,3px"),
+                opacity=1,
+            )
+            for ssp in CE_PARENT
+        ]
+
     def depth_annotations(self) -> list[dict]:
         annotations = []
+        # gap between arrow and markers, constant in pixels
+        gap = 0.04 * TABLE_BOTTOM / self.panel_height
         for ssp, parent in CE_PARENT.items():
             x = self._position(ssp)
             annotations.append(
                 dict(
-                    x=x, y=self.depths[ssp] - 0.04, ax=x, ay=self.depths[parent] + 0.04,
+                    x=x, y=self.depths[ssp] - gap, ax=x, ay=self.depths[parent] + gap,
                     xref="x", yref="y", axref="x", ayref="y",
                     showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5,
                     arrowcolor=SSP_COLORS[ssp], text="",
@@ -531,28 +560,36 @@ class ScenarioOverviewFigure:
                 dict(
                     x=x, y=self.depths[ssp], xref="x", yref="y", xshift=14, xanchor="left",
                     text=SSP_LABELS[ssp].replace(" ", "<br>"), showarrow=False,
-                    align="left", font=dict(size=TABLE_FONT_SIZE, color=LABEL_COLOR),
+                    align="left", font=dict(size=self.font_size, color=LABEL_COLOR),
                 )
             )
         annotations.append(self._y_axis_arrow())
         annotations.append(self._x_axis_label())
         return annotations
 
+    @property
+    def _panel_top(self) -> float:
+        """Distance of the panel's plot area from the top, leaving room for x-axis ticks above."""
+        return TICK_SPACE if self.flipped else 0
+
     def _x_axis_label(self) -> dict:
         """Axis label left of the SSP numbers, on the level of the tick labels."""
         return dict(
-            text="SSP:", x=self._x(PANEL_LEFT + PANEL_AXIS_OFFSET),
-            y=self._y(TABLE_BOTTOM + TICK_SPACE / 2 - 6), xref="paper", yref="paper",
+            text="SSP:", x=self._x(self.panel_left + PANEL_AXIS_OFFSET),
+            y=self._y(self._panel_top - 15 if self.flipped
+                      else self.panel_height + TICK_SPACE / 2 - 6), xref="paper", yref="paper",
             xanchor="right", yanchor="middle", showarrow=False,
-            font=dict(size=TABLE_FONT_SIZE, color=RULE_COLOR),
+            font=dict(size=self.font_size, color=RULE_COLOR),
         )
 
     def _y_axis_arrow(self) -> dict:
         """Unitless y axis, drawn as an arrow pointing towards more circularity."""
-        overshoot = 10
+        overshoot = 0 if self.flipped else 10
+        tip, tail = (self.panel_height + overshoot, 0) if self.flipped else (
+            -overshoot, self.panel_height)
         return dict(
-            x=self._x(PANEL_LEFT + PANEL_AXIS_OFFSET), y=self._y(-overshoot),
-            ax=0, ay=TABLE_BOTTOM + overshoot,
+            x=self._x(self.panel_left + PANEL_AXIS_OFFSET), y=self._y(tip + self._panel_top),
+            ax=0, ay=tail - tip,
             xref="paper", yref="paper", axref="pixel", ayref="pixel",
             showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.2,
             arrowcolor=AXIS_COLOR, text="",
@@ -560,7 +597,8 @@ class ScenarioOverviewFigure:
 
     def depth_range(self) -> list[float]:
         depths = self.depths.values()
-        return [min(min(depths), 0) - 0.15, max(depths) + 0.15]
+        low, high = min(min(depths), 0) - 0.15, max(depths) + 0.15
+        return [high, low] if self.flipped else [low, high]
 
     def plot(self) -> go.Figure:
         table_shapes, table_annotations = self.table()
@@ -572,18 +610,20 @@ class ScenarioOverviewFigure:
             font=dict(family="Arial, sans-serif", size=16, color="#222222"),
             showlegend=False,
             xaxis=dict(
-                domain=[self._x(PANEL_LEFT + PANEL_AXIS_OFFSET), 1],
+                domain=[self._x(self.panel_left + PANEL_AXIS_OFFSET), 1],
                 tickmode="array",
                 tickvals=list(range(len(BASE_ORDER))),
                 ticktext=[ssp.removeprefix("SSP") for ssp in BASE_ORDER],
-                tickfont=dict(size=TABLE_FONT_SIZE),
+                tickfont=dict(size=self.font_size),
                 range=[-0.5, len(BASE_ORDER) - 0.5],
                 ticks="",
+                side="top" if self.flipped else "bottom",
             ),
             yaxis=dict(
                 anchor="x",
-                domain=[self._y(TABLE_BOTTOM), self._y(0)],
-                title=dict(text="Circularity depth", standoff=8),
+                domain=[self._y(self._panel_top + self.panel_height), self._y(self._panel_top)],
+                title=dict(text="Circularity depth", standoff=8,
+                           font=dict(size=self.font_size + 2)),
                 showline=False,
                 showticklabels=False,
                 ticks="",
@@ -593,12 +633,30 @@ class ScenarioOverviewFigure:
                 range=self.depth_range(),
             ),
             margin=MARGIN,
-            shapes=table_shapes,
+            shapes=table_shapes + self.depth_shapes(),
             annotations=table_annotations + self.depth_annotations(),
             paper_bgcolor=BACKGROUND,
             plot_bgcolor=BACKGROUND,
         )
         return fig
+
+
+class CircularityDepthFigure(ScenarioOverviewFigure):
+    """Circularity depth panel of figure 12 without the parameter table.
+
+    The axis is flipped (high circularity at the bottom) and the panel is wider.
+    """
+
+    panel_left = 20
+    flipped = True
+    font_size = 20
+    height = round(0.8 * HEIGHT)
+    panel_height = height - MARGIN["t"] - MARGIN["b"] - TICK_SPACE
+    standalone_panel_width = 380
+    width = MARGIN["l"] + panel_left + PANEL_AXIS_OFFSET + standalone_panel_width + MARGIN["r"]
+
+    def table(self) -> tuple[list[dict], list[dict]]:
+        return [], []
 
 
 def save(fig: go.Figure, output_name: str, width: int, height: int):
@@ -609,6 +667,9 @@ def save(fig: go.Figure, output_name: str, width: int, height: int):
 
 
 figure = ScenarioOverviewFigure()
-save(figure.plot(), "fig12_scenario_overview", width=WIDTH, height=HEIGHT)
+save(figure.plot(), "fig12_scenario_overview", width=figure.width, height=figure.height)
+depth_figure = CircularityDepthFigure(figure.data)
+save(depth_figure.plot(), "fig12_circularity_depth", width=depth_figure.width,
+     height=depth_figure.height)
 
 print("END")

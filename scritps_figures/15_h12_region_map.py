@@ -102,40 +102,53 @@ def add_region_label(fig: go.Figure, label: RegionLabel):
     )
 
 
-fig = go.Figure()
-for region in H12_REGION_ORDER:
-    countries = mapping[mapping["RegionCode"] == region]
-    color = H12_REGION_COLORS[region]
-    fig.add_trace(
-        go.Choropleth(
-            locations=countries["CountryCode"],
-            z=[0] * len(countries),
-            text=countries["X"] + " (" + region + ")",
-            hoverinfo="text",
-            # constant colorscale: every country of the region gets the region colour
-            colorscale=[[0, color], [1, color]],
-            showscale=False,
-            marker_line_color="white",
-            marker_line_width=0.3,
-            showlegend=False,
+def build_map(labeled: bool) -> go.Figure:
+    """Build the region map.
+
+    Args:
+        labeled: Whether to draw region names with leader lines. The unlabeled (compact) variant
+            has no margins, so that it stays legible when small.
+    """
+    fig = go.Figure()
+    for region in H12_REGION_ORDER:
+        countries = mapping[mapping["RegionCode"] == region]
+        color = H12_REGION_COLORS[region]
+        fig.add_trace(
+            go.Choropleth(
+                locations=countries["CountryCode"],
+                z=[0] * len(countries),
+                text=countries["X"] + " (" + region + ")",
+                hoverinfo="text",
+                # constant colorscale: every country of the region gets the region colour
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                marker_line_color="white",
+                marker_line_width=0.3,
+                showlegend=False,
+            )
         )
+    if labeled:
+        for label in REGION_LABELS:
+            add_region_label(fig, label)
+    margin = 10 if labeled else 0
+    fig.update_layout(
+        template="plotly_white",
+        geo={
+            "projection_type": "equal earth",
+            "showframe": False,
+            "showcoastlines": False,
+            "landcolor": "#e6e6e6",
+            "showland": True,
+            "bgcolor": "rgba(0,0,0,0)",
+            # Crop the (unmapped) Antarctic land mass.
+            "lataxis": {"range": [-58, 88]},
+        },
+        margin={"l": margin, "r": margin, "t": margin, "b": margin},
     )
-for label in REGION_LABELS:
-    add_region_label(fig, label)
-fig.update_layout(
-    template="plotly_white",
-    geo={
-        "projection_type": "equal earth",
-        "showframe": False,
-        "showcoastlines": False,
-        "landcolor": "#e6e6e6",
-        "showland": True,
-        "bgcolor": "rgba(0,0,0,0)",
-        # Crop the (unmapped) Antarctic land mass.
-        "lataxis": {"range": [-58, 88]},
-    },
-    margin={"l": 10, "r": 10, "t": 10, "b": 10},
-)
-save(fig, "fig15_h12_region_map", width=1300, height=600)
+    return fig
+
+
+save(build_map(labeled=True), "fig15_h12_region_map", width=1300, height=600)
+save(build_map(labeled=False), "fig15_h12_region_map_compact", width=800, height=380)
 
 print("END")

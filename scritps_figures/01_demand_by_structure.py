@@ -1,4 +1,4 @@
-"""Figure 1: combined-MFA cement demand stacked by building structure and function.
+"""Figure 1: combined-MFA cement production stacked by building structure and function.
 
 Stacked areas show the reconciled (combined) cement demand split over the building-structure
 dimension (`s`: Concrete / Masonry / Timber / Steel), with each structure further subdivided over
@@ -23,6 +23,7 @@ from constants import (
     FIGURES_DIR,
     FIRST_PLOT_YEAR,
     REGION_SHORT_NAMES,
+    REGION_MAPPING,
     AGG_REGIONS,
     AGG_REGION_ORDER,
     FUNCTION_DISPLAY_NAMES,
@@ -39,7 +40,7 @@ from constants import (
 from helpers import add_last_historical_line, load_figure_data, shade, shade_levels, to_h12
 
 MT_PER_T = 1e-6
-YLABEL = "Cement demand (Mt)"
+YLABEL = "Cement production (Mt)"
 
 # Short labels for the colour key; its axis titles ("Structure", "Use") provide the context.
 KEY_STRUCTURE_LABELS = {"C": "Concrete", "M": "Masonry", "T": "Timber", "S": "Steel"}
@@ -49,7 +50,23 @@ BAND_LABEL_YEAR = 2075
 
 # Which scenarios to plot: "all", or a list of keys from constants.SCENARIOS,
 # e.g. ["SSP2"].
-SCENARIOS = "all"
+SCENARIOS = ["SSP2"]
+
+# Plot only one H12 region as a single panel, e.g. "EUR" (keys of constants.REGION_SHORT_NAMES).
+# None produces the global and the regional figures.
+SINGLE_REGION: str | None = "GRC"
+# Region resolution of the data of the single-region figure: "h12" (aggregated from the model
+# regions) or e.g. "gtap155" (model regions used directly, so SINGLE_REGION can be a country).
+SINGLE_REGION_MAPPING = "gtap155"
+# First year shown in the single-region figure.
+SINGLE_REGION_START_YEAR = 1990
+# Font size factor of the single-region figure, relative to the global figure.
+SINGLE_REGION_FONT_SCALE = 2.6
+# Plot only the structure x use colour key as a separate figure (no data panels).
+LEGEND_ONLY = False
+
+# Titles of single regions outside H12.
+REGION_TITLES = {"GRC": "Greece"}
 
 _ALL_SCENARIOS = list(SCENARIO_KEYS)
 
@@ -96,7 +113,7 @@ def build_series(buildings, functions) -> list[dict]:
 
 
 def demand(combined, selections, region=None):
-    """Combined cement demand (Mt) summed to time, for the given selection(s).
+    """Combined cement production (Mt) summed to time, for the given selection(s).
 
     `combined` is the reconciled in-use inflow of new material, aggregated to H12."""
     if isinstance(selections, dict):
@@ -132,8 +149,9 @@ class ColourKey:
     AXIS_TITLE_WIDTH = 28
     TOP_OFFSET = 70  # below the plot area, leaving room for the x-axis title
 
-    def __init__(self, series: list[dict], font_size: int = 15):
+    def __init__(self, series: list[dict], font_size: int = 15, top_offset: float = TOP_OFFSET):
         self.font_size = font_size
+        self.top_offset = top_offset
         buildings = [s for s in series if s["structure"] is not None]
         self.colors = {(s["structure"], s["function"]): s["color"] for s in buildings}
         self.structures = list(dict.fromkeys(s["structure"] for s in buildings))[::-1]
@@ -141,10 +159,10 @@ class ColourKey:
 
     def height(self) -> float:
         """Vertical extent below the plot area in pixels."""
-        return (self.TOP_OFFSET + 2 * self.LINE_HEIGHT
+        return (self.top_offset + 2 * self.LINE_HEIGHT
                 + len(self.structures) * (self.CELL_HEIGHT + self.GAP))
 
-    def _width(self) -> float:
+    def width(self) -> float:
         n_cols = len(self.functions)
         return (self.AXIS_TITLE_WIDTH + self.ROW_LABEL_WIDTH + n_cols * self.CELL_WIDTH
                 + (n_cols - 1) * self.GAP)
@@ -159,7 +177,7 @@ class ColourKey:
         return 0.5 + pixels / self.plot_width
 
     def _y(self, pixels: float) -> float:
-        return -pixels / self.plot_height
+        return self.y_origin - pixels / self.plot_height
 
     def _text(self, fig: go.Figure, text: str, x: float, y: float, xanchor: str, yanchor: str,
               bold: bool = False, angle: float = 0):
@@ -173,17 +191,21 @@ class ColourKey:
             font={"size": self.font_size, "color": "black"},
         )
 
-    def add_to(self, fig: go.Figure, plot_width: int, plot_height: int):
-        """Draw the key, horizontally centred below a plot area of the given size (px)."""
+    def add_to(self, fig: go.Figure, plot_width: int, plot_height: int, inside: bool = False):
+        """Draw the key, horizontally centred below a plot area of the given size (px).
+
+        With `inside`, the key starts at the top of the plot area instead of below it.
+        """
         self.plot_width = plot_width
         self.plot_height = plot_height
-        left = -self._width() / 2
+        self.y_origin = 1.0 if inside else 0.0
+        left = -self.width() / 2
         self.grid_left = left + self.AXIS_TITLE_WIDTH + self.ROW_LABEL_WIDTH
-        self.grid_top = self.TOP_OFFSET + 2 * self.LINE_HEIGHT
+        self.grid_top = self.top_offset + 2 * self.LINE_HEIGHT
         grid_right = self._col_left(len(self.functions) - 1) + self.CELL_WIDTH
         grid_bottom = self._row_top(len(self.structures) - 1) + self.CELL_HEIGHT
 
-        self._text(fig, "Use", (self.grid_left + grid_right) / 2, self.TOP_OFFSET,
+        self._text(fig, "Use", (self.grid_left + grid_right) / 2, self.top_offset,
                    "center", "top", bold=True)
         for col, function in enumerate(self.functions):
             self._text(fig, KEY_FUNCTION_LABELS.get(function, function),
@@ -209,7 +231,7 @@ class ColourKey:
 
 
 def label_unsplit_bands(fig: go.Figure, time, series: list[dict], stack_values: list,
-                        row: int | None = None, col: int | None = None):
+                        row: int | None = None, col: int | None = None, font_size: float = 13):
     """Name the bands not split by structure inside the stack at `BAND_LABEL_YEAR`.
 
     `stack_values` holds the plotted values of each series, in stacking order.
@@ -223,12 +245,13 @@ def label_unsplit_bands(fig: go.Figure, time, series: list[dict], stack_values: 
             fig.add_annotation(
                 text=s["name"], x=BAND_LABEL_YEAR, y=(band_bottom + band_top) / 2,
                 xanchor="center", yanchor="middle", showarrow=False,
-                font={"size": 13, "color": "black"}, **kwargs,
+                font={"size": font_size, "color": "black"}, **kwargs,
             )
         band_bottom = band_top
 
 
-def add_brace(fig: go.Figure, row: int, col: int, y_bottom: float, y_top: float, label: str):
+def add_brace(fig: go.Figure, row: int | None, col: int | None, y_bottom: float, y_top: float,
+              label: str, font_size: float = 14):
     """Curly brace right of a subplot spanning `y_bottom`..`y_top` (data units), with a label.
 
     x is given in domain units of the subplot (1 = right edge), y in data units.
@@ -251,7 +274,7 @@ def add_brace(fig: go.Figure, row: int, col: int, y_bottom: float, y_top: float,
     fig.add_annotation(
         text=label, x=tip_x + 0.01, y=y_middle, xref="x domain", yref="y",
         xanchor="left", yanchor="middle", showarrow=False,
-        font={"size": 14, "color": "black"}, row=row, col=col,
+        font={"size": font_size, "color": "black"}, row=row, col=col,
     )
 
 
@@ -263,10 +286,19 @@ def save(fig, output_name: str, width: int, height: int):
     print(f"Saved figure to: {png_path}")
 
 
-def plot_global(combined, time, series, output_name: str):
+def plot_global(combined, time, series, output_name: str, region: str | None = None,
+                braces: bool = False, colour_key: bool = True, font_scale: float = 1.0,
+                compact: bool = False):
+    """Single-panel figure for the world, or for one H12 region if `region` is given.
+
+    With `braces`, the bottom-up and top-down parts are marked by braces at the last year. With
+    `colour_key`, the structure x use colour key is drawn below the plot area. All font sizes are
+    multiplied by `font_scale`. With `compact`, the figure is narrow, has few ticks and omits all
+    annotations (band labels, braces).
+    """
     fig = go.Figure()
 
-    stack_values = [demand(combined, s["selections"]).values for s in series]
+    stack_values = [demand(combined, s["selections"], region=region).values for s in series]
     for s, values in zip(series, stack_values):
         fig.add_trace(
             go.Scatter(
@@ -281,10 +313,31 @@ def plot_global(combined, time, series, output_name: str):
         )
 
     add_last_historical_line(fig)
-    label_unsplit_bands(fig, time, series, stack_values)
+    if not compact:
+        label_unsplit_bands(fig, time, series, stack_values, font_size=13 * font_scale)
+    if braces:
+        total_top = sum(values[-1] for values in stack_values)
+        bottom_up_top = sum(values[-1] for s, values in zip(series, stack_values)
+                            if s["structure"] is not None)
+        gap = 0.01 * total_top
+        add_brace(fig, None, None, 0, bottom_up_top - gap, "Bottom-up", 14 * font_scale)
+        add_brace(fig, None, None, bottom_up_top + gap, total_top, "Top-down", 14 * font_scale)
+    first_year = SINGLE_REGION_START_YEAR if compact else FIRST_PLOT_YEAR
     key = ColourKey(series)
-    plot_width, plot_height = 930, 500
-    margin = {"t": 50, "l": 90, "b": round(key.height()) + 20, "r": 30}
+    plot_width, plot_height = (600, 500) if compact else (930, 500)
+    bottom = round(key.height()) + 20 if colour_key else round(70 * font_scale)
+    margin = {
+        "t": round(50 * font_scale),
+        "l": round(90 * font_scale),
+        "b": bottom,
+        "r": round(150 * font_scale) if braces else 30,
+    }
+    if compact:
+        margin = {"t": round(30 * font_scale), "l": round(75 * font_scale), "b": round(60 * font_scale),
+                  "r": round(25 * font_scale)}
+    if region is not None:
+        fig.update_layout(title={"text": REGION_SHORT_NAMES.get(region, REGION_TITLES.get(region, region)),
+                                 "font_size": 18 * font_scale})
     fig.update_layout(
         xaxis_title="Year",
         yaxis_title=YLABEL,
@@ -294,9 +347,30 @@ def plot_global(combined, time, series, output_name: str):
         showlegend=False,
         margin=margin,
     )
-    fig.update_xaxes(range=[FIRST_PLOT_YEAR, max(time)], title_font_size=15)
-    fig.update_yaxes(title_font_size=15)
-    key.add_to(fig, plot_width, plot_height)
+    fig.update_xaxes(range=[first_year, max(time)], title_font_size=15 * font_scale,
+                     tickfont_size=12 * font_scale)
+    fig.update_yaxes(title_font_size=15 * font_scale, tickfont_size=12 * font_scale)
+    if compact:
+        fig.update_xaxes(tickvals=[2025, 2100])
+        fig.update_yaxes(nticks=4)
+    if colour_key:
+        key.add_to(fig, plot_width, plot_height)
+
+    save(fig, output_name, width=plot_width + margin["l"] + margin["r"],
+         height=plot_height + margin["t"] + margin["b"])
+
+
+def plot_legend(series, output_name: str):
+    """Figure holding only the structure x use colour key."""
+    fig = go.Figure()
+    key = ColourKey(series, top_offset=0)
+    # The key fills a plot area with hidden axes.
+    plot_width, plot_height = round(key.width()) + 20, round(key.height())
+    margin = {"t": 10, "l": 10, "b": 10, "r": 10}
+    fig.update_layout(template="plotly_white", showlegend=False, margin=margin)
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    key.add_to(fig, plot_width, plot_height, inside=True)
 
     save(fig, output_name, width=plot_width + margin["l"] + margin["r"],
          height=plot_height + margin["t"] + margin["b"])
@@ -413,8 +487,11 @@ def plot_regional(
 
 def run(ssp: str):
     print(f"--- Scenario {ssp} ---")
-    data = load_figure_data(ssp)
-    combined = to_h12(data.reconciled.inflow)
+    mapping = SINGLE_REGION_MAPPING if SINGLE_REGION is not None else REGION_MAPPING
+    data = load_figure_data(ssp, region_mapping=mapping)
+    combined = data.reconciled.inflow
+    if mapping == "h12" or SINGLE_REGION is None:
+        combined = to_h12(combined, mapping)
 
     time = combined.dims["t"].items
     regions = combined.dims["r"].items
@@ -425,6 +502,18 @@ def run(ssp: str):
     functions = [f for f in all_functions if str(f) in FUNCTION_DISPLAY_NAMES]
 
     series = build_series(buildings, functions)
+
+    if LEGEND_ONLY:
+        plot_legend(series, "fig1_demand_by_structure_legend")
+        return
+
+    if SINGLE_REGION is not None:
+        if SINGLE_REGION not in regions:
+            raise ValueError(f"Unknown H12 region {SINGLE_REGION!r}, choose from {list(regions)}")
+        plot_global(combined, time, series,
+                    f"fig1_demand_by_structure_{SINGLE_REGION}_{ssp}", region=SINGLE_REGION,
+                    colour_key=False, font_scale=SINGLE_REGION_FONT_SCALE, compact=True)
+        return
 
     plot_global(combined, time, series, f"fig1_demand_by_structure_global_{ssp}")
     plot_regional(
@@ -439,5 +528,7 @@ def run(ssp: str):
 
 for _ssp in selected_scenarios():
     run(_ssp)
+    if LEGEND_ONLY:
+        break  # the colour key does not depend on the scenario
 
 print("END")

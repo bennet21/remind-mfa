@@ -63,7 +63,7 @@ DRIVER_ASPECT = "Drivers"
 SCENARIO_BAR_WIDTH = 0.7
 STEP_BAR_WIDTH = 0.5
 # Space right of the last bar for the total potential arrow and its label, in bar positions.
-TOTAL_POTENTIAL_SPACE = 1.9
+TOTAL_POTENTIAL_SPACE = 4.0
 # Savings marked by a bracket above the bars, and the total potential marked by an arrow right
 # of the last bar, as (from scenario, to scenario). Relative savings refer to the first one.
 SAVINGS_BRACKETS = [("SSP2", "SSP2_CE"), ("SSP1", "SSP1_CE")]
@@ -79,23 +79,27 @@ TOTAL_ARROW_WIDTH = 2.2
 # Shaded band spanning the total potential, behind the bars.
 TOTAL_BAND_COLOR = "rgba(0,0,0,0.1)"
 GRID_COLOR = "#f2f2f2"
+# Font size of the savings labels, twice that of the other labels to be legible on a poster.
+SAVINGS_FONT_SIZE = 28
+LABEL_FONT_SIZE = 16
+AXIS_FONT_SIZE = 19
 
 # Figure geometry in pixels, used to place the step labels and the brackets below them.
-WIDTH = 1550
-HEIGHT = 600
-MARGIN = dict(l=75, r=20, t=30, b=55)
+WIDTH = 1800
+HEIGHT = 770
+MARGIN = dict(l=85, r=20, t=30, b=65)
 PLOT_HEIGHT = HEIGHT - MARGIN["t"] - MARGIN["b"]
 STEP_LABEL_SHIFT = 4
-STEP_LABEL_LINE_HEIGHT = 17
+STEP_LABEL_LINE_HEIGHT = 20
 BRACKET_OFFSET = 8
 BRACKET_TICK = 5
 # Distance of the savings brackets above the highest bar they span, incl. its value label.
-SAVINGS_BRACKET_OFFSET = 30
+SAVINGS_BRACKET_OFFSET = 34
 # Head room above the highest bar, as a share of its value.
-Y_HEADROOM = 0.1
+Y_HEADROOM = 0.14
 
 # Height of a line of the region labels and the space between neighbouring labels, in pixels.
-REGION_LABEL_LINE_HEIGHT = 17
+REGION_LABEL_LINE_HEIGHT = 20
 REGION_LABEL_PADDING = 6
 
 
@@ -140,7 +144,7 @@ AGGREGATED = RegionLevel(
     },
     colors=AGG_REGION_COLORS,
     of_h12=AGG_REGIONS,
-    label_space=1.8,
+    label_space=1.9,
 )
 
 H12 = RegionLevel(
@@ -148,7 +152,7 @@ H12 = RegionLevel(
     labels={region: REGION_SHORT_NAMES[region] for region in H12_REGION_ORDER},
     colors=H12_REGION_COLORS,
     of_h12={region: region for region in H12_REGION_ORDER},
-    label_space=2.7,
+    label_space=3.2,
 )
 
 
@@ -370,7 +374,7 @@ class CEWaterfallFigure:
                 yshift=-3,
                 text=f"<i>{aspect}</i>",
                 showarrow=False,
-                font=dict(size=14, color=LABEL_COLOR),
+                font=dict(size=LABEL_FONT_SIZE, color=LABEL_COLOR),
             )
             for aspect, first, last in self.aspect_groups()
         ]
@@ -399,7 +403,7 @@ class CEWaterfallFigure:
                 arrowcolor=CONNECTOR_COLOR,
                 standoff=3,
                 align="right",
-                font=dict(size=14, color=LABEL_COLOR),
+                font=dict(size=LABEL_FONT_SIZE, color=LABEL_COLOR),
             )
             for region, middle, label_position in zip(
                 self.regions.order, middles, label_positions
@@ -422,7 +426,7 @@ class CEWaterfallFigure:
                     yshift=9,
                     text=text,
                     showarrow=False,
-                    font=dict(size=13, color=LABEL_COLOR),
+                    font=dict(size=LABEL_FONT_SIZE, color=LABEL_COLOR),
                 )
             )
         return annotations
@@ -449,7 +453,7 @@ class CEWaterfallFigure:
                     yshift=-STEP_LABEL_SHIFT,
                     text=f"<i>{text}</i>" if column.is_driver_step else text,
                     showarrow=False,
-                    font=dict(size=13, color=LABEL_COLOR),
+                    font=dict(size=LABEL_FONT_SIZE, color=LABEL_COLOR),
                 )
             )
         return annotations
@@ -507,7 +511,7 @@ class CEWaterfallFigure:
                         self.columns[first].total, self.columns[last].total
                     ),
                     showarrow=False,
-                    font=dict(size=14, color=SAVINGS_COLOR),
+                    font=dict(size=SAVINGS_FONT_SIZE, color=SAVINGS_COLOR),
                 )
             )
         return shapes, annotations
@@ -565,11 +569,11 @@ class CEWaterfallFigure:
                 xanchor="left",
                 align="left",
                 text=(
-                    "<b>Total potential</b><br>"
+                    "<b>Total<br>potential</b><br>"
                     + self.savings_text(start.total, end.total).replace(" (", "<br>(")
                 ),
                 showarrow=False,
-                font=dict(size=14, color=SAVINGS_COLOR),
+                font=dict(size=SAVINGS_FONT_SIZE, color=SAVINGS_COLOR),
             ),
         ]
         return shapes, annotations
@@ -580,7 +584,7 @@ class CEWaterfallFigure:
         total_shapes, total_annotations = self.total_potential()
         fig.update_layout(
             template="simple_white",
-            font=dict(family="Arial, sans-serif", size=16, color="#222222"),
+            font=dict(family="Arial, sans-serif", size=AXIS_FONT_SIZE, color="#222222"),
             barmode="stack",
             showlegend=False,
             xaxis=dict(
