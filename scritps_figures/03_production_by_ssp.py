@@ -4,14 +4,17 @@ Line plot comparing total (or per-region) cement production from the top-down MF
 for the five SSP scenarios and the Ambitious / Pragmatic Circularity variants of SSP1 / SSP2
 (drawn dashed in their parent SSP colour, with a light band between each SSP and its
 circularity variant). A vertical dashed line marks the last
-historical year. Produces a global figure and a 12-panel regional figure.
+historical year. The baseline projections of the validation data are shown as grey markers.
+Produces a global figure and a 12-panel regional figure.
 
 Run from the repository root:
     uv run python scritps_figures/03_production_by_ssp.py
 """
 
 import math
+from pathlib import Path
 
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.colors import hex_to_rgb
 from plotly.subplots import make_subplots
@@ -60,11 +63,26 @@ LABELLED_XTICKS = [LABELLED_FIRST_YEAR, LAST_HISTORICAL_YEAR, 2100]
 LABELLED_FRAME = {"color": "rgba(0,0,0,0.8)", "width": 2.5, "radius": 14}
 # Length (px) of the line samples in the legend, which spans the width of the figure.
 LABELLED_LEGEND_ITEM_WIDTH = 70
-LABELLED_MARGIN = {"t": 130, "l": 130, "b": 100, "r": 30}
+# The top margin holds the two-row legend (scenarios and validation sources).
+LABELLED_MARGIN = {"t": 190, "l": 130, "b": 100, "r": 30}
 # Distance (px) of the y-axis title from the plot area.
 YLABEL_OFFSET = 85
 YLABEL = "Cement production (Gt)"
 SSPS = list(SCENARIOS)
+# Validation data: baseline scenario, marker symbol and legend label of each source, the years
+# marked (if available), and the sources whose projection is also drawn as a line.
+VALIDATION_FILE = Path("data_in/validation/validation.mif")
+VALIDATION_VARIABLE = "Material Demand|Non-Metallic Minerals|Cement"
+VALIDATION_SOURCES = {
+    "Arp et al 2026": ("SSP2 Baseline (BL)", "circle-open", "Arp et al. (2026), SSP2 Baseline"),
+    "IEA WEO 2025": ("Stated Policies", "diamond-open", "IEA (2025), Stated Policies"),
+    "WCA 2024": ("BAU", "square-open", "WCA (2024), Business as usual"),
+}
+VALIDATION_YEARS = [2035, 2050, 2100]
+VALIDATION_LINE_SOURCES = {"Arp et al 2026"}
+VALIDATION_COLOR = "rgba(80,80,80,0.7)"
+VALIDATION_MARKER_SIZE = 7
+GT_PER_MT = 1e-3
 
 # reconciled in-use inflow of new material, aggregated to H12
 combined_by_ssp = {ssp: to_h12(load_figure_data(ssp).reconciled.inflow) for ssp in SSPS}
@@ -86,6 +104,91 @@ def production(combined, region=None):
         arr = combined[filter_dict].sum_to("t") * GT_PER_T
         result = arr if result is None else result + arr
     return result
+
+
+def read_validation() -> pd.DataFrame:
+    """Baseline cement demand (Gt) of the validation sources, indexed by source and region, with
+    one column per year."""
+    data = pd.read_csv(VALIDATION_FILE, sep=";", na_values="N/A")
+    is_baseline = [
+        model in VALIDATION_SOURCES and scenario == VALIDATION_SOURCES[model][0]
+        for model, scenario in zip(data["Model"], data["Scenario"])
+    ]
+    data = data[(data["Variable"] == VALIDATION_VARIABLE) & is_baseline]
+    years = [column for column in data.columns if column.isdigit()]
+    data = data.set_index(["Model", "Region"])[years] * GT_PER_MT
+    data.columns = [int(year) for year in years]
+    return data
+
+
+validation = read_validation()
+
+
+def validation_values(source: str, region=None) -> pd.Series:
+    """Validation values of a source in a region (None: World, aggregated regions: sum of their
+    H12 regions), in the years the source covers."""
+    region_items = [
+        source_region
+        for source_region, aggregate_region in AGG_REGIONS.items()
+        if aggregate_region == region
+    ] or ["World" if region is None else region]
+    keys = [(source, region_item) for region_item in region_items]
+    if not all(key in validation.index for key in keys):
+        return pd.Series(dtype=float)
+    return validation.loc[keys].sum(min_count=len(keys)).dropna()
+
+
+def add_validation_markers(fig, region=None, showlegend=True, kwargs=None):
+    """Grey markers of the baseline projections of the validation sources in VALIDATION_YEARS.
+    The projections of VALIDATION_LINE_SOURCES are also drawn as a thin line over
+    all years they cover. The legend entries are marked by meta="validation legend"."""
+    marker = {
+        "size": VALIDATION_MARKER_SIZE,
+        "color": VALIDATION_COLOR,
+        "line": {"width": 1.2, "color": VALIDATION_COLOR},
+    }
+    line = {"color": VALIDATION_COLOR, "width": 1, "dash": "dot"}
+    for source, (_, symbol, label) in VALIDATION_SOURCES.items():
+        values = validation_values(source, region=region)
+        marked = values[values.index.isin(VALIDATION_YEARS)]
+        if values.empty:
+            continue
+        has_line = source in VALIDATION_LINE_SOURCES
+        common = {"name": label, "legendgroup": f"validation {source}", "hoverinfo": "skip"}
+        if has_line:
+            fig.add_trace(
+                go.Scatter(x=list(values.index), y=values.values, mode="lines", line=line,
+                           showlegend=False, **common),
+                **kwargs,
+            )
+            # legend entry only, showing line and marker
+            fig.add_trace(
+                go.Scatter(x=[None], y=[None], mode="lines+markers", line=line,
+                           marker=marker | {"symbol": symbol}, meta="validation legend",
+                           showlegend=showlegend, **common),
+                **kwargs,
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=list(marked.index),
+                y=marked.values,
+                mode="markers",
+                marker=marker | {"symbol": symbol},
+                # markers at the last year are not cut off at the edge of the panel
+                cliponaxis=False,
+                meta=None if has_line else "validation legend",
+                showlegend=showlegend and not has_line,
+                **common,
+            ),
+            **kwargs,
+        )
+
+
+def world_y_max() -> float:
+    """Upper end of the y-axis of the World panel, covering all scenarios and validation markers."""
+    model_max = max(production(combined).values.max() for combined in combined_by_ssp.values())
+    validation_max = pd.Series([validation_values(source).max() for source in VALIDATION_SOURCES]).max()
+    return 1.05 * max(model_max, validation_max)
 
 
 def add_ce_bands(fig, region=None, kwargs=None):
@@ -143,6 +246,7 @@ def add_ssp_traces(fig, region=None, showlegend=True, row=None, col=None):
             ),
             **kwargs,
         )
+    add_validation_markers(fig, region=region, showlegend=showlegend, kwargs=kwargs)
 
 
 def spread_labels(targets: list[float], min_gap: float) -> list[float]:
@@ -428,7 +532,7 @@ def plot_regional_labelled(
         fillcolor="rgba(0,0,0,0)",
     )
     # the lower end is below zero, as in the autoscaled regional panels
-    y_max = 1.05 * max(production(combined).values.max() for combined in combined_by_ssp.values())
+    y_max = world_y_max()
     fig.update_yaxes(range=[-0.04 * y_max, y_max], row=1, col=1)
     add_line_labels(
         fig,
@@ -568,9 +672,14 @@ def plot_combined_top(output_name: str, region_items, display_names, ncols_regio
 
     add_ssp_traces(fig, region=None, showlegend=False, row=1, col=1)
     add_last_historical_line(fig, label=True, row=1, col=1)
-    y_max = 1.05 * max(production(combined).values.max() for combined in combined_by_ssp.values())
+    y_max = world_y_max()
     fig.update_yaxes(showgrid=True, range=[0, y_max], row=1, col=1)
     add_line_labels(fig, GLOBAL_TOP_FIRST_YEAR, y_max)
+    # key of the validation markers, in the empty upper left corner of the global panel
+    fig.for_each_trace(
+        lambda trace: trace.update(showlegend=True),
+        selector=lambda trace: trace.meta == "validation legend" and trace.xaxis == "x",
+    )
 
     for index, region in enumerate(region_items):
         row = index // ncols_regional + 2
@@ -596,7 +705,16 @@ def plot_combined_top(output_name: str, region_items, display_names, ncols_regio
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
+        showlegend=True,
+        legend={
+            "x": fig.layout.xaxis.domain[0] + 0.01,
+            "xanchor": "left",
+            "y": fig.layout.yaxis.domain[1] - 0.005,
+            "yanchor": "top",
+            "title": {"text": "Literature projections", "font": {"size": GLOBAL_TOP_FONT_SIZES["tick"]}},
+            "font": {"size": GLOBAL_TOP_FONT_SIZES["tick"], "color": "rgb(80,80,80)"},
+            "bgcolor": "rgba(0,0,0,0)",
+        },
         margin={"t": 60, "l": 110, "b": 100, "r": 30},
         annotations=list(fig.layout.annotations)
         + [
