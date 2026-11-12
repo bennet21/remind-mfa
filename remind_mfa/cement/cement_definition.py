@@ -173,8 +173,8 @@ def get_cement_definition(
     # 5) Parameters
     parameters = [
         # historical + future parameters: if time-dependent (h), they will have to be projected to (t)
-        RemindMFAParameterDefinition(name="end_use_split", dim_letters=("r", "u",),
-                                     description="Split of cement production into different end uses."),
+        RemindMFAParameterDefinition(name="end_use_split", dim_letters=("h", "r", "u",),
+                                     description="Historical split of cement production into different end uses."),
         RemindMFAParameterDefinition(name="cement_production", dim_letters=("h", "r"),
                                      description="Historical cement production volume for each region and year."),
         RemindMFAParameterDefinition(name="clinker_ratio", dim_letters=("h", "r"),
@@ -247,29 +247,34 @@ scenario_parameters = [
     ),
     PlainDataPointDefinition(
         name="development_gdppc_high",
-        description="GDP per capita (PPP) above which regions keep their own splits. ",
+        description="GDP per capita (PPP) above which regions keep their own splits.",
     ),
     ExtrapolationDefinition(
         name="clinker_ratio",
         dim_letters=("r",),
+        description="Clinker-to-cement mass ratio, per region.",
     ),
     ExtrapolationDefinition(
         name="cement_ratio",
         dim_letters=("r", "m"),
+        description="Mass share of cement in newly produced construction materials, per region and material.",
     ),
     # cement lifetime is time-dependent and therefore needs (constant) extrapolation first
     ExtrapolationDefinition(
         name="lifetime_mean",
         dim_letters=("r",),
+        description="Mean lifetime of cement stocks, per region.",
     ),
     ExtrapolationDefinition(
         name="lifetime_std",
         dim_letters=("r",),
+        description="Standard deviation of the lifetime of cement stocks, per region.",
     ),
     ExtrapolationDefinition(
         name="reuse_share",
         dim_letters=("r", "m"),
         create_new=True,
+        description="Share of end-of-life construction materials that is reused, per region and material.",
     ),
 ]
 
